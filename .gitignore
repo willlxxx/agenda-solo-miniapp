@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / Svelte
+node_modules/
+frontend/.svelte-kit/
+frontend/build/
+frontend/dist/
+
+# Entorno y datos locales
+.env
+*.local
+.pgdata/
+pg.log
+
+# Sistema
+.DS_Store
+Thumbs.db

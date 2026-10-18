@@ -1,0 +1,202 @@
+/* Design tokens y base mobile-first. Modo claro/oscuro automático:
+   el doctor puede estar en un gabinete con poca luz. */
+:root {
+	color-scheme: light dark;
+
+	--bg: #f7f8fa;
+	--superficie: #ffffff;
+	--borde: #e2e5ea;
+	--texto: #14181f;
+	--texto-suave: #5b6472;
+	--primario: #2563eb;
+	--primario-texto: #ffffff;
+	--peligro: #dc2626;
+	--radio: 12px;
+	--tap: 44px; /* target táctil mínimo */
+	--sombra: 0 1px 3px rgb(20 24 31 / 8%);
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #0e1116;
+		--superficie: #171b22;
+		--borde: #262c36;
+		--texto: #e8ebef;
+		--texto-suave: #97a0ad;
+		--primario: #3b82f6;
+		--sombra: none;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	background: var(--bg);
+	color: var(--texto);
+	font-family:
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		sans-serif;
+	font-size: 16px;
+	line-height: 1.5;
+	-webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+h3 {
+	margin: 0 0 0.5rem;
+	line-height: 1.25;
+	font-weight: 650;
+}
+
+h1 {
+	font-size: 1.6rem;
+}
+h2 {
+	font-size: 1.15rem;
+}
+
+p {
+	margin: 0 0 0.75rem;
+}
+
+a {
+	color: var(--primario);
+	text-decoration: none;
+}
+
+.contenedor {
+	width: 100%;
+	max-width: 720px;
+	margin-inline: auto;
+	padding: 1rem;
+}
+
+.tarjeta {
+	background: var(--superficie);
+	border: 1px solid var(--borde);
+	border-radius: var(--radio);
+	padding: 1rem;
+	box-shadow: var(--sombra);
+	margin-bottom: 1rem;
+}
+
+.fila {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	flex-wrap: wrap;
+}
+
+.fila--entre {
+	justify-content: space-between;
+}
+
+.etiqueta {
+	display: block;
+	font-size: 0.86rem;
+	font-weight: 600;
+	color: var(--texto-suave);
+	margin-bottom: 0.25rem;
+}
+
+.campo {
+	margin-bottom: 0.9rem;
+}
+
+input,
+select,
+button {
+	font: inherit;
+	color: inherit;
+	min-height: var(--tap);
+	padding: 0.5rem 0.7rem;
+	border-radius: 10px;
+	border: 1px solid var(--borde);
+	background: var(--superficie);
+}
+
+input,
+select {
+	width: 100%;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+	outline: 3px solid color-mix(in srgb, var(--primario) 45%, transparent);
+	outline-offset: 1px;
+}
+
+.boton {
+	background: var(--primario);
+	color: var(--primario-texto);
+	border-color: var(--primario);
+	font-weight: 600;
+	padding-inline: 1.1rem;
+	cursor: pointer;
+}
+
+.boton:disabled {
+	opacity: 0.55;
+	cursor: progress;
+}
+
+.boton--suave {
+	background: transparent;
+	color: var(--texto);
+	border-color: var(--borde);
+	font-weight: 550;
+}
+
+.boton--peligro {
+	background: transparent;
+	color: var(--peligro);
+	border-color: color-mix(in srgb, var(--peligro) 40%, var(--borde));
+}
+
+.boton--chico {
+	min-height: 36px;
+	padding: 0.2rem 0.55rem;
+	font-size: 0.9rem;
+}
+
+.ajuste {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	font-size: 0.9rem;
+	color: var(--texto-suave);
+}
+
+.error {
+	color: var(--peligro);
+	font-size: 0.92rem;
+	margin-top: 0.5rem;
+}
+
+.aviso {
+	font-size: 0.86rem;
+	color: var(--texto-suave);
+}
+
+.punto {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	flex: none;
+	background: var(--borde);
+}
+
+.punto--vivo {
+	background: #16a34a;
+}
