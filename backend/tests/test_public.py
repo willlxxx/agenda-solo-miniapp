@@ -223,5 +223,15 @@ async def test_horizonte_demasiado_largo_es_422(client: AsyncClient, doctor: dic
 
 async def test_el_payload_no_fuga_citas_ni_pacientes(client: AsyncClient, doctor: dict):
     cuerpo = await huecos_de(client, doctor["slug_unico"], await id_servicio(client, "Revisión"))
-    assert set(cuerpo) == {"doctor", "servicio", "paso_minutos", "anticipacion_minutos", "dias"}
+    # desde/hasta son el horizonte consultado: la página los necesita para ofrecer la lista de
+    # espera aunque ningún día tenga huecos. Ni contacto del doctor ni datos clínicos.
+    assert set(cuerpo) == {
+        "doctor",
+        "servicio",
+        "paso_minutos",
+        "anticipacion_minutos",
+        "desde",
+        "hasta",
+        "dias",
+    }
     assert set(cuerpo["doctor"]) == {"nombre", "slug_unico", "timezone"}

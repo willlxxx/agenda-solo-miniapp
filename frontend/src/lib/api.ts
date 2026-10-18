@@ -5,9 +5,12 @@ import type {
 	DiaBloqueado,
 	Disponibilidad,
 	Doctor,
+	EntradaLista,
 	EstadoCita,
 	FichaPublica,
 	Franja,
+	ListaDeEsperaPublica,
+	ListaEspera,
 	Servicio
 } from '#lib/types';
 
@@ -85,5 +88,14 @@ export const api = {
 	// Agenda del doctor: la ventana pedida, pintada en su huso, y el estado de cada cita.
 	agenda: (desde: string, dias = 7) => request<AgendaVentana>(`/appointments?desde=${desde}&dias=${dias}`),
 	cambiarEstado: (id: string, estado: EstadoCita) =>
-		request<CitaAgenda>(`/appointments/${id}`, { method: 'PATCH', body: JSON.stringify({ estado }) })
+		request<CitaAgenda>(`/appointments/${id}`, { method: 'PATCH', body: JSON.stringify({ estado }) }),
+
+	// Lista de espera: el paciente se apunta por su enlace; el doctor gestiona desde el panel.
+	apuntarse: (slug: string, datos: object) =>
+		request<ListaDeEsperaPublica>(`/public/${encodeURIComponent(slug)}/lista-espera`, json(datos)),
+	listaEspera: (filtro: 'pendientes' | 'contactadas' | 'todas' = 'pendientes') =>
+		request<ListaEspera>(`/waitlist?filtro=${filtro}`),
+	marcarLista: (id: string, estado: 'en_espera' | 'contactada') =>
+		request<EntradaLista>(`/waitlist/${id}`, { method: 'PATCH', body: JSON.stringify({ estado }) }),
+	quitarLista: (id: string) => request<void>(`/waitlist/${id}`, { method: 'DELETE' })
 };

@@ -138,6 +138,10 @@ class DisponibilidadPublic(BaseModel):
     servicio: ServicePublic
     paso_minutos: int
     anticipacion_minutos: int
+    # El horizonte que se ha consultado, para que la página pueda ofrecer la lista de espera
+    # diciendo «no queda nada entre el X y el Y» aunque los días vacíos no salgan en `dias`.
+    desde: date
+    hasta: date
     dias: list[DiaDisponiblePublic]
 
 
@@ -205,3 +209,55 @@ class AgendaVentana(BaseModel):
 
 class EstadoIn(BaseModel):
     estado: Literal["confirmada", "completada", "no_vino", "cancelada"]
+
+
+# --- Lista de espera ---
+# El paciente pide un hueco que no existe; esto no reserva nada, es una demanda apuntada.
+
+
+class ListaDeEsperaIn(BaseModel):
+    servicio: UUID
+    fecha: date | None = Field(default=None, description="Día que quería (null = cualquier día)")
+    preferencia: Literal["manana", "tarde", "cualquier_hora"] = "cualquier_hora"
+    nombre: str = Field(min_length=2, max_length=120)
+    telefono: str | None = Field(default=None, max_length=40)
+    email: EmailStr | None = None
+    consentimiento: bool = Field(description="Casilla obligatoria: guardamos sus datos para avisarle")
+
+
+class ListaDeEsperaPublica(BaseModel):
+    id: UUID
+    doctor: str
+    servicio: str
+    fecha: date | None
+    preferencia: str
+    estado: str
+    # False si acaba de crearse; true si ya estaba apuntado y no hemos duplicado la fila.
+    creado: bool
+
+
+class EntradaLista(BaseModel):
+    """Lo que ve el doctor: contacto para llamar y qué pedía el paciente. Nada clínico."""
+
+    id: UUID
+    nombre: str
+    telefono: str | None
+    email: str | None
+    servicio: str | None
+    fecha: date | None
+    preferencia: str | None
+    estado: str
+    # El instante real de la petición: la lista se atiende por orden de llegada.
+    pedido_utc: datetime
+
+
+class ListaEspera(BaseModel):
+    total: int
+    en_espera: int
+    contactadas: int
+    filtro: Literal["pendientes", "contactadas", "todas"]
+    entradas: list[EntradaLista]
+
+
+class EstadoListaIn(BaseModel):
+    estado: Literal["en_espera", "contactada"]

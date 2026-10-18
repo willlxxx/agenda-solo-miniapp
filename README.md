@@ -59,7 +59,7 @@ npm run dev          # http://localhost:5173, con proxy /api -> :8000
 ## Pruebas
 
 ```bash
-cd backend && pytest -q          # 123 tests sobre PostgreSQL real (base agenda_test autogestionada)
+cd backend && pytest -q          # 149 tests sobre PostgreSQL real (base agenda_test autogestionada)
 cd frontend && npm run check     # svelte-check, 0 errores
 ```
 
@@ -149,11 +149,43 @@ La vista está en `frontend/src/lib/panel/Agenda.svelte`, montada arriba del pan
 (con "Hoy"), día por día, con botones Completada / No vino / Cancelar y un "Ver las N cerradas" que
 además deja Reconfirmar. La cita recién cerrada se queda visible para que el cambio se note.
 
+## Lista de espera (Semana 2)
+
+Cuando el horizonte del enlace no da huecos, el paciente puede dejar su contacto. Es **demanda, no
+reserva**: un apuntado no tapa ninguna hora (hay test de regresión contra `disponibilidad`).
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `POST /api/v1/public/{slug}/lista-espera` | Apunta la petición: servicio, día opcional, franja (`manana`/`tarde`/`cualquier_hora`), nombre y teléfono o email, con consentimiento explícito. |
+| `GET /api/v1/waitlist?filtro=pendientes\|contactadas\|todas` | La lista del doctor, ordenada: primero lo pendiente y dentro de cada bloque por orden de llegada (máx. 200). |
+| `PATCH /api/v1/waitlist/{id}` | Pasa a `contactada` (ya le llamó) o de vuelta a `en_espera`. |
+| `DELETE /api/v1/waitlist/{id}` | Borra la petición. Es la vía de borrado GDPR que puede pedir un paciente. |
+
+Reglas:
+
+- Mismo advisory lock por doctor que las citas, pero con clave aparte (`lista-espera:{doctor}`):
+  apuntarse no bloquea reservas ni se bloquea por ellas.
+- Identidad igual que la reserva: (doctor, nombre, teléfono) → una sola ficha en `patients`. Con
+  solo email se busca por email normalizado a minúsculas, porque PG no deduplica NULL y si no la
+  lista crearía una ficha paralela en cada intento.
+- Idempotente con la clave del `UNIQUE (doctor_id, patient_id, fecha)`: recargar la página devuelve
+  la fila existente con `creado: false` en vez de duplicar. Si esa fila ya estaba `contactada`, la
+  respuesta lo dice y la página lo cuenta, en lugar de prometer un aviso que ya ocurrió.
+- `blocked_dates` y franjas apagadas también alimentan la lista: un `blocked_date` de mañana hace
+  que mañana no ofrezca huecos y el paciente acabe aquí.
+- Sin teléfono ni email no se guarda nada: no habría forma de avisar.
+
+La vista del paciente está en `frontend/src/routes/d/[slug]/+page.svelte` (se abre sola cuando el
+horizonte viene vacío, y con un "¿Ninguna hora te viene bien?" cuando sí las hay pero no le encajan).
+La del doctor es `frontend/src/lib/panel/ListaDeEspera.svelte`, justo debajo de la agenda, con
+contadores por pestaña y un borrado que pide confirmar con un segundo clic.
+
 ## Siguiente paso
 
-El paciente reserva y el doctor ya ve y gestiona su semana. Lo que falta para el resto de la Semana 2:
+El paciente reserva, el doctor gestiona su semana y recoge a quien se quedó sin hueco. Lo que falta:
 
-- **Lista de espera** cuando un día no ofrece huecos (`waitlist` ya tiene tabla).
+- **From waitlist to cita** (Semana 2-3): hoy el doctor llama y marca "avisado"; falta poder
+  convertir esa petición en una cita suya con un clic desde el panel.
 - **Recordatorios** 24 h / 1 h antes (APScheduler o Redis; `timestamptz` ya está bien para calcularlos).
 - Antes de publicar: generar un `JWT_SECRET` nuevo (el de `backend/.env` es de desarrollo y ese
   archivo nunca se sube), y decidir el proveedor de SMS/email para los recordatorios.

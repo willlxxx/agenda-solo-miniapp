@@ -10,12 +10,22 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_session
 from app.domain.disponibilidad import CitaLocal, Franja, calcular_disponibilidad
-from app.models import UNIQUE_CONFIRMADA, Appointment, Availability, BlockedDate, Doctor, Patient, Service
+from app.models import (
+    UNIQUE_CONFIRMADA,
+    UNIQUE_EN_ESPERA,
+    Appointment,
+    Availability,
+    BlockedDate,
+    Doctor,
+    Patient,
+    Service,
+    Waitlist,
+)
 from app.schemas import (
     CitaIn,
     CitaPublica,
@@ -24,6 +34,8 @@ from app.schemas import (
     DoctorResumen,
     FichaPublica,
     HuecoPublic,
+    ListaDeEsperaIn,
+    ListaDeEsperaPublica,
     ServicePublic,
 )
 
@@ -149,6 +161,8 @@ async def disponibilidad(
         servicio=ServicePublic.model_validate(fila),
         paso_minutos=paso,
         anticipacion_minutos=anticipacion,
+        desde=fechas[0],
+        hasta=fechas[-1],
         dias=[
             DiaDisponiblePublic(
                 fecha=d.fecha,
@@ -258,4 +272,145 @@ async def reservar(slug: str, datos: CitaIn, session: AsyncSession = Depends(get
         duracion_minutos=duracion_servicio,
         servicio=nombre_servicio,
         doctor=nombre_doctor,
+    )
+
+
+@router.post("/{slug}/lista-espera", response_model=ListaDeEsperaPublica, status_code=status.HTTP_201_CREATED)
+async def apuntar_lista_de_espera(slug: str, datos: ListaDeEsperaIn, session: AsyncSession = Depends(get_session)):
+    """El hueco no existe: apuntamos la demanda y el doctor llama cuando lo libera.
+
+    Es la única escritura pública además de la reserva, así que usa su propio advisory lock por
+    doctor (`lista-espera:`), distinto del de citas: dos pacientes entrando en la lista no pelean
+    por un hueco, solo pelean por no duplicarse.
+    """
+    if not datos.consentimiento:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Necesitamos tu consentimiento expreso para guardar tus datos",
+        )
+    contacto = (datos.telefono or "").strip() or (str(datos.email) if datos.email else None)
+    if contacto is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Sin teléfono ni email no podemos avisarte cuando quede un hueco",
+        )
+
+    doctor = await _doctor_por_slug(session, slug)
+    zona = _zona(doctor)
+    ahora = datetime.now(zona).replace(tzinfo=None)
+    fila = await _servicio_del_doctor(session, doctor, datos.servicio)
+    if not fila.activo:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Ese servicio no está disponible en este enlace")
+
+    if datos.fecha is not None:
+        if datos.fecha < ahora.date():
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="Ese día ya pasó")
+        if (datos.fecha - ahora.date()).days > MAX_DIAS:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=f"Solo apuntamos peticiones con {MAX_DIAS} días de antelación",
+            )
+
+    # Escalares antes del rollback: la tx implícita de las lecturas invalida los objetos cargados.
+    doctor_id = doctor.id
+    nombre_doctor = doctor.nombre
+    servicio_id = fila.id
+    nombre_servicio = fila.nombre
+
+    await session.rollback()
+    async with session.begin():
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:clave, 0))"),
+            {"clave": f"lista-espera:{doctor_id}"},
+        )
+        # Misma identidad que usa la reserva (nombre + teléfono dentro del doctor), así un paciente
+        # que ya fue apuntado no crea una ficha paralela en la agenda del doctor.
+        telefono = (datos.telefono or "").strip()
+        correo = str(datos.email).lower() if datos.email else None
+        paciente = await _paciente_de_lista(session, doctor_id, datos.nombre, telefono, correo)
+        if paciente is None:
+            paciente = Patient(
+                doctor_id=doctor_id,
+                nombre=datos.nombre,
+                telefono=telefono or None,
+                # Guardamos el email ya en minúsculas: es la forma en la que lo buscamos arriba.
+                email=correo,
+            )
+            session.add(paciente)
+            await session.flush()
+
+        # Misma clave que el UNIQUE de la tabla, así un duplicado nunca llega a insertar y revienta
+        # en un 500: si la fila ya existe (pendiente o ya avisada) devolvemos esa fila.
+        condicion_fecha = Waitlist.fecha.is_(None) if datos.fecha is None else Waitlist.fecha == datos.fecha
+        existente = await session.scalar(
+            select(Waitlist).where(
+                Waitlist.doctor_id == doctor_id,
+                Waitlist.patient_id == paciente.id,
+                condicion_fecha,
+            )
+        )
+        if existente is not None:
+            # Recargar la página no debe inflar la lista del doctor: devolvemos su fila original.
+            return ListaDeEsperaPublica(
+                id=existente.id,
+                doctor=nombre_doctor,
+                servicio=nombre_servicio,
+                fecha=existente.fecha,
+                preferencia=existente.preferencia_horaria or "cualquier_hora",
+                estado=existente.estado,
+                creado=False,
+            )
+
+        entrada = Waitlist(
+            doctor_id=doctor_id,
+            service_id=servicio_id,
+            patient_id=paciente.id,
+            fecha=datos.fecha,
+            preferencia_horaria=datos.preferencia,
+            estado=UNIQUE_EN_ESPERA,
+        )
+        session.add(entrada)
+
+    return ListaDeEsperaPublica(
+        id=entrada.id,
+        doctor=nombre_doctor,
+        servicio=nombre_servicio,
+        fecha=datos.fecha,
+        preferencia=datos.preferencia,
+        estado=UNIQUE_EN_ESPERA,
+        creado=True,
+    )
+
+
+async def _paciente_de_lista(
+    session: AsyncSession,
+    doctor_id: uuid.UUID,
+    nombre: str,
+    telefono: str,
+    correo: str | None,
+) -> Patient | None:
+    """Busca la ficha del paciente con la identidad que traía la petición.
+
+    La unicalidad de `patients` es (doctor, nombre, teléfono), y PG no deduplica NULL: si llega
+    solo email buscamos por email, si no la lista crearía una ficha nueva en cada intento.
+    """
+    if telefono:
+        return await session.scalar(
+            select(Patient).where(
+                Patient.doctor_id == doctor_id, Patient.nombre == nombre, Patient.telefono == telefono
+            )
+        )
+    if correo:
+        return await session.scalar(
+            select(Patient).where(
+                Patient.doctor_id == doctor_id,
+                Patient.nombre == nombre,
+                # lower() en los dos lados: una reserva antigua pudo guardar el email tal como se
+                # escribió, y si no lo igualamos así crearíamos una ficha paralela por una mayúscula.
+                func.lower(Patient.email) == correo,
+                Patient.telefono.is_(None),
+            )
+        )
+    return await session.scalar(
+        select(Patient).where(Patient.doctor_id == doctor_id, Patient.nombre == nombre, Patient.telefono.is_(None))
     )

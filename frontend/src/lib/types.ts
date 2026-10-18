@@ -58,6 +58,9 @@ export type Disponibilidad = {
 	servicio: Servicio;
 	paso_minutos: number;
 	anticipacion_minutos: number;
+	/** Horizonte consultado: los días sin huecos no salen en `dias`, así que hay que saberlo. */
+	desde: string;
+	hasta: string;
 	dias: DiaDisponible[];
 };
 
@@ -101,4 +104,44 @@ export type AgendaVentana = {
 	total: number;
 	confirmadas: number;
 	citas: CitaAgenda[];
+};
+
+/** Qué hora del día prefiere el paciente de la lista. Viaja como literal, se pinta en español. */
+export type PreferenciaLista = 'manana' | 'tarde' | 'cualquier_hora';
+
+export const PREFERENCIAS: { valor: PreferenciaLista; texto: string }[] = [
+	{ valor: 'cualquier_hora', texto: 'Cualquier hora' },
+	{ valor: 'manana', texto: 'Por la mañana' },
+	{ valor: 'tarde', texto: 'Por la tarde' }
+];
+
+/** Respuesta del POST público: `creado` false significa "ya estabas apuntado". */
+export type ListaDeEsperaPublica = {
+	id: string;
+	doctor: string;
+	servicio: string;
+	fecha: string | null;
+	preferencia: PreferenciaLista;
+	estado: string;
+	creado: boolean;
+};
+
+export type EntradaLista = {
+	id: string;
+	nombre: string;
+	telefono: string | null;
+	email: string | null;
+	servicio: string | null;
+	fecha: string | null;
+	preferencia: PreferenciaLista | null;
+	estado: 'en_espera' | 'contactada';
+	pedido_utc: string;
+};
+
+export type ListaEspera = {
+	total: number;
+	en_espera: number;
+	contactadas: number;
+	filtro: 'pendientes' | 'contactadas' | 'todas';
+	entradas: EntradaLista[];
 };

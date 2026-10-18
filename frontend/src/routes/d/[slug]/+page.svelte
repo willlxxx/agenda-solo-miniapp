@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { api, ErrorApi } from '#lib/api';
-	import type { Cita, DiaDisponible, Hueco, Servicio } from '#lib/types';
+	import { PREFERENCIAS } from '#lib/types';
+	import type {
+		Cita,
+		DiaDisponible,
+		Hueco,
+		ListaDeEsperaPublica,
+		PreferenciaLista,
+		Servicio
+	} from '#lib/types';
 
 	let { data } = $props();
 
@@ -14,11 +22,25 @@
 	let guardando = $state(false);
 	let error = $state<string | null>(null);
 	let cita = $state<Cita | null>(null);
+	// Los días sin huecos no vienen en la respuesta; sin horizonte no se puede decir
+	// «no queda nada entre el 18 y el 31» ni ofrecer un calendario para la lista.
+	let horizonte = $state<{ desde: string; hasta: string } | null>(null);
+
+	// Lista de espera: la demanda de un hueco que ahora no existe.
+	let listaAbierta = $state(false);
+	let listaGuardando = $state(false);
+	let listaError = $state<string | null>(null);
+	let listaHecha = $state<ListaDeEsperaPublica | null>(null);
+	let preferencia = $state<PreferenciaLista>('cualquier_hora');
+	// '' = cualquier día: hay pacientes que solo saben qué franja les viene bien.
+	let diaPedido = $state('');
 
 	let nombre = $state('');
 	let telefono = $state('');
 	let correo = $state('');
 	let consentimiento = $state(false);
+	// Consentimiento aparte: aceptar la reserva no es aceptar quedarse en la lista.
+	let consentimientoLista = $state(false);
 
 	const diasSemana = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
@@ -27,13 +49,48 @@
 		return new Date(`${iso}T12:00:00`);
 	}
 
+	function isoTexto(d: Date): string {
+		return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+	}
+
 	function letraDia(iso: string): string {
 		const dia = fechaDe(iso).getDay(); // 0 = domingo
 		return diasSemana[dia === 0 ? 6 : dia - 1];
 	}
+
 	const puedeEnviar = $derived(
 		nombre.trim().length >= 2 && consentimiento && !!hueco && !!fecha && !guardando
 	);
+
+	/** Todos los días del horizonte, incluidos los vacíos: la lista se apunta precisamente a esos. */
+	const diasHorizonte = $derived.by(() => {
+		if (!horizonte) return [];
+		const salida: string[] = [];
+		const cursor = fechaDe(horizonte.desde);
+		const fin = fechaDe(horizonte.hasta);
+		while (cursor <= fin && salida.length < 70) {
+			salida.push(isoTexto(cursor));
+			cursor.setDate(cursor.getDate() + 1);
+		}
+		return salida;
+	});
+
+	const hayContacto = $derived(telefono.trim().length >= 6 || correo.trim().includes('@'));
+	const puedeLista = $derived(
+		nombre.trim().length >= 2 && consentimientoLista && hayContacto && !listaGuardando
+	);
+	const textoPreferencia = $derived(
+		PREFERENCIAS.find((p) => p.valor === preferencia)?.texto ?? 'cualquier hora'
+	);
+
+	/** Tres verdades distintas: alta nueva, repetida y pendiente, repetida y ya avisada. */
+	const tituloLista = $derived.by(() => {
+		if (!listaHecha) return '';
+		if (listaHecha.creado) return 'Te hemos apuntado a la lista de espera';
+		return listaHecha.estado === 'contactada'
+			? 'Ya habías pedido ese día y tu médico ya te avisó'
+			: 'Ya estabas en la lista de espera';
+	});
 
 	function textoError(e: unknown): string {
 		return e instanceof ErrorApi ? e.message : 'No pudimos conectar con la agenda. Inténtalo de nuevo.';
@@ -41,6 +98,12 @@
 
 	function nombreDia(iso: string): string {
 		return iso ? fechaDe(iso).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }) : '';
+	}
+
+	function diaCorto(iso: string): string {
+		return iso
+			? fechaDe(iso).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })
+			: '';
 	}
 
 	function horaLarga(valor: string): string {
@@ -51,12 +114,18 @@
 		servicio = servicioElegido;
 		paso = 'hora';
 		hueco = null;
+		listaAbierta = false;
+		listaHecha = null;
+		listaError = null;
 		cargandoHoras = true;
 		error = null;
 		try {
-			dias = (await api.disponibilidad(data.slug, servicioElegido.id, 14)).dias;
+			const respuesta = await api.disponibilidad(data.slug, servicioElegido.id, 14);
+			dias = respuesta.dias;
+			horizonte = { desde: respuesta.desde, hasta: respuesta.hasta };
 			fecha = dias[0]?.fecha ?? null;
-			if (!dias.length) error = 'Este médico no tiene horas libres de este servicio ahora mismo.';
+			// Sin un solo hueco la lista es el único camino útil: la abrimos directamente.
+			if (!dias.length) listaAbierta = true;
 		} catch (e) {
 			error = textoError(e);
 		} finally {
@@ -80,10 +149,33 @@
 	async function recargarHoras() {
 		if (!servicio) return;
 		try {
-			dias = (await api.disponibilidad(data.slug, servicio.id, 14)).dias;
+			const respuesta = await api.disponibilidad(data.slug, servicio.id, 14);
+			dias = respuesta.dias;
+			horizonte = { desde: respuesta.desde, hasta: respuesta.hasta };
 			if (fecha && !dias.some((d) => d.fecha === fecha)) fecha = dias[0]?.fecha ?? null;
 		} catch {
 			/* si la recarga falla dejamos las horas que ya veía el paciente */
+		}
+	}
+
+	async function apuntarse() {
+		if (!servicio || !puedeLista) return;
+		listaGuardando = true;
+		listaError = null;
+		try {
+			listaHecha = await api.apuntarse(data.slug, {
+				servicio: servicio.id,
+				fecha: diaPedido || null,
+				preferencia,
+				nombre: nombre.trim(),
+				telefono: telefono.trim() || null,
+				email: correo.trim() || null,
+				consentimiento: true
+			});
+		} catch (e) {
+			listaError = textoError(e);
+		} finally {
+			listaGuardando = false;
 		}
 	}
 
@@ -124,6 +216,12 @@
 		telefono = '';
 		correo = '';
 		consentimiento = false;
+		consentimientoLista = false;
+		listaAbierta = false;
+		listaHecha = null;
+		listaError = null;
+		diaPedido = '';
+		preferencia = 'cualquier_hora';
 		error = null;
 	}
 </script>
@@ -195,8 +293,98 @@
 						</button>
 					{/each}
 				</div>
+			{:else if horizonte}
+				<p class="aviso">
+					No queda ningún hueco de {servicio?.nombre.toLowerCase()} entre el {diaCorto(horizonte.desde)} y el
+					{diaCorto(horizonte.hasta)}.
+				</p>
 			{:else}
-				<p class="aviso">No quedan huecos en los próximos 14 días.</p>
+				<p class="aviso">Este médico no tiene horas libres ahora mismo.</p>
+			{/if}
+
+			{#if !cargandoHoras}
+				{#if listaHecha}
+					<div class="tarjeta confirmada">
+						<p><strong>{tituloLista}</strong></p>
+						<p class="aviso">
+							{#if listaHecha.estado === 'contactada'}
+								Tu médico marcó esta petición como avisada. Si no le has encontrado, escríbele o
+								llámale: sigue en su lista.
+							{:else}
+								Te avisará con {listaHecha.servicio} cuando quede un hueco
+								{diaPedido ? `el ${nombreDia(diaPedido).toLowerCase()}` : 'algún día'} ·
+								{textoPreferencia.toLowerCase()}.
+								{#if !listaHecha.creado}No hace falta que te apuntes otra vez.{/if}
+							{/if}
+						</p>
+						<button class="boton boton--suave" type="button" onclick={empezarDeNuevo}>
+							Buscar otra cosa
+						</button>
+					</div>
+				{:else if listaAbierta}
+					<h3 class="titulo-lista">Avísame cuando quede un hueco</h3>
+					<p class="aviso">
+						Tu médico ve esta lista en su panel y te llama cuando libera una hora. No es una
+						reserva: todavía no tienes cita.
+					</p>
+
+					<form class="tarjeta" onsubmit={(e) => { e.preventDefault(); apuntarse(); }}>
+						<div class="campo">
+							<label class="etiqueta" for="lista-dia">Día que prefieres</label>
+							<select id="lista-dia" bind:value={diaPedido}>
+								<option value="">Cualquier día</option>
+								{#each diasHorizonte as d (d)}
+									<option value={d}>{nombreDia(d)}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="campo">
+							<label class="etiqueta" for="lista-franja">Franja</label>
+							<select id="lista-franja" bind:value={preferencia}>
+								{#each PREFERENCIAS as p (p.valor)}
+									<option value={p.valor}>{p.texto}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="campo">
+							<label class="etiqueta" for="lista-nombre">Nombre y apellidos</label>
+							<input id="lista-nombre" bind:value={nombre} autocomplete="name" required />
+						</div>
+						<div class="campo">
+							<label class="etiqueta" for="lista-telefono">Teléfono</label>
+							<input id="lista-telefono" type="tel" bind:value={telefono} autocomplete="tel" inputmode="tel" />
+						</div>
+						<div class="campo">
+							<label class="etiqueta" for="lista-correo">Email (opcional)</label>
+							<input id="lista-correo" type="email" bind:value={correo} autocomplete="email" />
+							{#if !hayContacto}
+								<span class="aviso">Necesitamos un teléfono o un email para poder avisarte.</span>
+							{/if}
+						</div>
+
+						<label class="campo consentimiento" for="lista-consentimiento">
+							<input id="lista-consentimiento" type="checkbox" bind:checked={consentimientoLista} />
+							<span>
+								Acepto que {data.doctor.nombre} guarde mi nombre y mi contacto mientras esté en la
+								lista de espera. No guardamos nada de tu salud. Puedes pedir que se borre escribiéndole.
+							</span>
+						</label>
+
+						<button class="boton" type="submit" disabled={!puedeLista}>
+							{listaGuardando ? 'Apuntando…' : 'Apuntarme'}
+						</button>
+
+						{#if listaError}
+							<p class="error" role="alert">{listaError}</p>
+						{/if}
+					</form>
+				{:else}
+					<button class="boton boton--suave enlace-lista" type="button" onclick={() => (listaAbierta = true)}>
+						{dias.length
+							? '¿Ninguna hora te viene bien? Avísame cuando quede una'
+							: 'Apuntarme a la lista de espera'}
+					</button>
+				{/if}
 			{/if}
 		{:else if paso === 'datos'}
 			<button class="boton boton--suave boton--chico" type="button" onclick={() => (paso = 'hora')}>
@@ -353,5 +541,18 @@
 
 	.resumen p {
 		margin: 0.25rem 0;
+	}
+
+	.titulo-lista {
+		margin: 1.5rem 0 0.25rem;
+		font-size: 1.05rem;
+	}
+
+	.enlace-lista {
+		margin-top: 1.25rem;
+	}
+
+	.confirmada p {
+		margin: 0.3rem 0;
 	}
 </style>

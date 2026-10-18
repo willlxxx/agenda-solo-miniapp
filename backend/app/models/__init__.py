@@ -26,6 +26,10 @@ from app.db import Base
 UNIQUE_CONFIRMADA = "confirmada"
 ESTADOS_CITA = ("confirmada", "completada", "no_vino", "cancelada")
 
+# La lista de espera es una petición, no una reserva: su estado solo dice si el doctor ya llamó.
+UNIQUE_EN_ESPERA = "en_espera"
+ESTADOS_LISTA = ("en_espera", "contactada")
+
 
 class Doctor(Base):
     __tablename__ = "doctors"
@@ -137,11 +141,33 @@ class Patient(Base):
 
 
 class Waitlist(Base):
+    """Pacientes que quieren un hueco que ahora no existe.
+
+    No reserva nada: es una demanda apuntada, así que un apuntado nunca tapa un hueco de la
+    disponibilidad. `fecha` admite NULL porque hay quien pide "cualquier día", y `estado` solo
+    registra si el doctor ya le avisó.
+    """
+
     __tablename__ = "waitlist"
+    __table_args__ = (
+        CheckConstraint(f"estado IN ('{UNIQUE_EN_ESPERA}','contactada')", name="ck_waitlist_estado"),
+        # El backstop de los duplicados; el caso fecha IS NULL lo resuelve la app dentro del lock.
+        UniqueConstraint("doctor_id", "patient_id", "fecha", name="uq_waitlist_paciente_dia"),
+        Index(
+            "ix_waitlist_doctor_estado",
+            "doctor_id",
+            "creado_en",
+            postgresql_where=text(f"estado = '{UNIQUE_EN_ESPERA}'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
     doctor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("doctors.id", ondelete="CASCADE"), nullable=False)
     service_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("services.id"))
     patient_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("patients.id"))
+    # Día que quería el paciente, en su calendario local del doctor; None = le da igual.
+    fecha: Mapped[date | None] = mapped_column(Date)
+    # Textual porque la columna ya existía así: 'manana' | 'tarde' | 'cualquier_hora'.
     preferencia_horaria: Mapped[str | None] = mapped_column(Text)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, server_default=UNIQUE_EN_ESPERA)
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
