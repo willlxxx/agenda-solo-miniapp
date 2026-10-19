@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Cookie, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionLocal
 from app.models import Doctor
 from app.security import decodificar_token
+
+
+def zona_del(doctor: Doctor) -> ZoneInfo:
+    """El huso guardado del doctor.
+
+    Sin él no se puede ni pintar la agenda, y ofrecer una hora en otro huso sería peor que un
+    error: citas a la hora equivocada. El 500 dice exactamente qué campo está roto.
+    """
+    try:
+        return ZoneInfo(doctor.timezone)
+    except (ZoneInfoNotFoundError, KeyError, ValueError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"El huso horario guardado ({doctor.timezone}) no es válido",
+        ) from exc
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

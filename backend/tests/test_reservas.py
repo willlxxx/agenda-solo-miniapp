@@ -2,21 +2,28 @@
 
 import asyncio
 import uuid
-from datetime import date, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, time, timedelta
 
+import pytest
 from httpx import AsyncClient
 
-from tests.conftest import DOCTOR_LOPEZ, nueva_sesion, registrar, sql_filas
+from tests.conftest import (
+    DOCTOR_LOPEZ,
+    lunes_del_cambio_de_horario,
+    lunes_que_viene,
+    nueva_sesion,
+    registrar,
+    sql_filas,
+    utc_de_esa_hora_local,
+)
 
-MADRID = ZoneInfo("Europe/Madrid")
-LUNES_VERANO = date(2026, 10, 19)  # Madrid en +02
-LUNES_INVIERNO = date(2026, 10, 26)  # tras el cambio de horario: +01
+# Hoy puede ser lunes y las 09:00 ya habrían pasado: los tests reservan el lunes que viene.
+LUNES = lunes_que_viene(date.today())
 PACIENTE = {"nombre": "Ana Paciente", "telefono": "600111222", "email": "ana.paciente@example.com"}
 
 
 async def reserva(
-    sesion: AsyncClient, slug: str, servicio: str, *, fecha: date = LUNES_VERANO, hora: str = "09:00", **extra
+    sesion: AsyncClient, slug: str, servicio: str, *, fecha: date = LUNES, hora: str = "09:00", **extra
 ):
     cuerpo = {"servicio": servicio, "fecha": fecha.isoformat(), "hora": hora, **PACIENTE, "consentimiento": True}
     return await sesion.post(f"/api/v1/public/{slug}/citas", json={**cuerpo, **extra})
@@ -29,7 +36,7 @@ async def revision(client: AsyncClient) -> str:
 
 async def inicios_de(client: AsyncClient, slug: str, servicio: str) -> list[str]:
     resp = await client.get(
-        f"/api/v1/public/{slug}/disponibilidad", params={"servicio": servicio, "desde": LUNES_VERANO, "dias": 1}
+        f"/api/v1/public/{slug}/disponibilidad", params={"servicio": servicio, "desde": LUNES, "dias": 1}
     )
     assert resp.status_code == 200, resp.text
     return [h["inicio"][:5] for h in resp.json()["dias"][0]["huecos"]]
@@ -79,7 +86,7 @@ async def test_concurrencia_real_25_peticiones_una_sola_cita(client: AsyncClient
                 f"/api/v1/public/{doctor['slug_unico']}/citas",
                 json={
                     "servicio": servicio,
-                    "fecha": LUNES_VERANO.isoformat(),
+                    "fecha": LUNES.isoformat(),
                     "hora": "11:00",
                     "nombre": f"Paciente {i}",
                     "telefono": f"600{i:05d}",
@@ -106,7 +113,7 @@ async def test_el_lock_no_sobre_bloquea_huecos_distintos(client: AsyncClient, do
                 f"/api/v1/public/{doctor['slug_unico']}/citas",
                 json={
                     "servicio": servicio,
-                    "fecha": LUNES_VERANO.isoformat(),
+                    "fecha": LUNES.isoformat(),
                     "hora": hora,
                     "nombre": f"Paciente {i}",
                     "telefono": f"610{i:05d}",
@@ -142,13 +149,14 @@ async def test_una_hora_que_no_esta_en_la_rejilla_es_409(client: AsyncClient, do
 
 
 async def test_un_dia_bloqueado_no_se_reserva(client: AsyncClient, doctor: dict):
-    await client.post("/api/v1/blocked-dates", json={"fecha": LUNES_VERANO.isoformat()})
+    await client.post("/api/v1/blocked-dates", json={"fecha": LUNES.isoformat()})
     assert (await reserva(client, doctor["slug_unico"], await revision(client))).status_code == 409
 
 
 async def test_el_pasado_y_el_horizonte_lejos_es_422(client: AsyncClient, doctor: dict):
     servicio = await revision(client)
-    assert (await reserva(client, doctor["slug_unico"], servicio, fecha=date(2026, 10, 1))).status_code == 422
+    ayer = date.today() - timedelta(days=3)
+    assert (await reserva(client, doctor["slug_unico"], servicio, fecha=ayer)).status_code == 422
     lejos = date.today() + timedelta(days=90)
     while lejos.weekday() != 0:
         lejos += timedelta(days=1)
@@ -174,21 +182,16 @@ async def test_servicio_desactivado_es_404(client: AsyncClient, doctor: dict):
 # --- Lo que queda guardado en BD ---
 
 
-async def test_la_duracion_se_congela_y_el_utc_respeta_el_huso(client: AsyncClient, doctor: dict):
+async def test_la_duracion_se_congela(client: AsyncClient, doctor: dict):
     servicio = await revision(client)
-    verano = await reserva(client, doctor["slug_unico"], servicio, fecha=LUNES_VERANO, hora="09:00")
-    invierno = await reserva(client, doctor["slug_unico"], servicio, fecha=LUNES_INVIERNO, hora="09:00")
-    assert (verano.status_code, invierno.status_code) == (201, 201)
-
+    resp = await reserva(client, doctor["slug_unico"], servicio, fecha=LUNES, hora="09:00")
+    assert resp.status_code == 201, resp.text
     filas = await sql_filas(
-        "select fecha_hora at time zone 'UTC', duracion_minutos, consentimiento_ok_en is not null "
-        "from appointments where doctor_id = cast(:d as uuid) order by fecha_hora",
+        "select duracion_minutos, consentimiento_ok_en is not null "
+        "from appointments where doctor_id = cast(:d as uuid)",
         d=doctor["id"],
     )
-    # 09:00 locales son 07:00 UTC en verano y 08:00 UTC en invierno: el huso del doctor manda.
-    assert [f[0].strftime("%m-%d %H:%M") for f in filas] == ["10-19 07:00", "10-26 08:00"]
-    assert [int(f[1]) for f in filas] == [30, 30]
-    assert all(f[2] for f in filas)  # evidencia de consentimiento en cada reserva
+    assert filas == [(30, True)]  # evidencia de consentimiento en cada reserva
 
     # Cambiar el servicio después no reescribe la cita existente.
     await client.patch(f"/api/v1/services/{servicio}", json={"duracion_minutos": 60})
@@ -196,7 +199,37 @@ async def test_la_duracion_se_congela_y_el_utc_respeta_el_huso(client: AsyncClie
         "select duracion_minutos from appointments where doctor_id = cast(:d as uuid) order by fecha_hora",
         d=doctor["id"],
     )
-    assert [int(f[0]) for f in despues] == [30, 30]
+    assert [int(f[0]) for f in despues] == [30]
+
+
+async def test_el_utc_respeta_el_huso_del_doctor_en_el_cambio_de_horario(client: AsyncClient, doctor: dict):
+    """Dos lunes que cruzan el cambio de horario: la misma hora de pared, distinto instante UTC.
+
+    Es la prueba de que convertimos con el huso guardado del doctor al reservar. Si el próximo
+    cambio cae fuera del horizonte de 60 días no hay fecha reservable con la que comprobarlo,
+    y el test se salta en lugar de fallar por el calendario.
+    """
+    pareja = lunes_del_cambio_de_horario(date.today())
+    if pareja is None:
+        pytest.skip("El próximo cambio de horario de Madrid cae fuera del horizonte reservable")
+    antes, despues = pareja
+    # Los dos son lunes y el desplazamiento cambia: si no, no estamos cruzando el cambio.
+    assert antes.weekday() == despues.weekday() == 0
+    en_antes = utc_de_esa_hora_local(antes, time(9, 0)).utcoffset()
+    en_despues = utc_de_esa_hora_local(despues, time(9, 0)).utcoffset()
+    assert en_antes != en_despues
+
+    servicio = await revision(client)
+    verano = await reserva(client, doctor["slug_unico"], servicio, fecha=antes, hora="09:00")
+    invierno = await reserva(client, doctor["slug_unico"], servicio, fecha=despues, hora="09:00")
+    assert (verano.status_code, invierno.status_code) == (201, 201), (verano.text, invierno.text)
+
+    filas = await sql_filas(
+        "select fecha_hora at time zone 'UTC' from appointments where doctor_id = cast(:d as uuid) order by fecha_hora",
+        d=doctor["id"],
+    )
+    esperados = [utc_de_esa_hora_local(f, time(9, 0)) for f in (antes, despues)]
+    assert [f[0] for f in filas] == esperados
 
 
 async def test_la_cita_no_guarda_nada_clinico(client: AsyncClient, doctor: dict):

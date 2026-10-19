@@ -1,4 +1,4 @@
-"""Agenda del doctor: las citas que entraron por su enlace público, con su estado.
+"""Agenda del doctor: las citas que entraron por su enlace o por su propio panel, con su estado.
 
 Todo se lee y se pinta en el huso del doctor, pero en la base el instante sigue en UTC.
 La única escritura es el estado: confirmada -> completada / no_vino / cancelada, y volver a
@@ -8,13 +8,13 @@ tanto por otra reserva del mismo día).
 
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_doctor, get_session
+from app.api.deps import get_current_doctor, get_session, zona_del
 from app.models import UNIQUE_CONFIRMADA, Appointment, Doctor, Patient, Service
 from app.schemas import AgendaVentana, CitaAgenda, EstadoIn, PacienteAgenda
 
@@ -24,16 +24,6 @@ router = APIRouter(prefix="/appointments", tags=["appointments"])
 MAX_DIAS_DE_HISTORICO = 92
 MAX_DIAS_POR_VENTANA = 30
 COLOR_AUSENTE = "#94a3b8"
-
-
-def _zona(doctor: Doctor) -> ZoneInfo:
-    try:
-        return ZoneInfo(doctor.timezone)
-    except (ZoneInfoNotFoundError, KeyError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"El huso horario guardado ({doctor.timezone}) no es válido",
-        ) from exc
 
 
 def _pintar(
@@ -88,7 +78,7 @@ async def agenda(
     doctor: Doctor = Depends(get_current_doctor),
     session: AsyncSession = Depends(get_session),
 ):
-    zona = _zona(doctor)
+    zona = zona_del(doctor)
     hoy = datetime.now(zona).date()
     if desde is None:
         desde = hoy
@@ -115,7 +105,7 @@ async def cambiar_estado(
     doctor: Doctor = Depends(get_current_doctor),
     session: AsyncSession = Depends(get_session),
 ):
-    zona = _zona(doctor)
+    zona = zona_del(doctor)
     cita = await session.get(Appointment, cita_id)
     if cita is None or cita.doctor_id != doctor.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Cita no encontrada")

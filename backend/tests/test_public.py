@@ -1,20 +1,27 @@
 """Endpoints públicos del enlace /d/{slug}: lectura sin sesión sobre PostgreSQL real."""
 
 import uuid
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
+import pytest
 from httpx import AsyncClient
 
-from tests.conftest import DOCTOR_GARCIA, DOCTOR_LOPEZ, insertar_cita, nueva_sesion, registrar
+from tests.conftest import (
+    DOCTOR_GARCIA,
+    DOCTOR_LOPEZ,
+    insertar_cita,
+    lunes_del_cambio_de_horario,
+    lunes_que_viene,
+    nueva_sesion,
+    registrar,
+    utc_de_esa_hora_local,
+)
 
 
 def proximo_lunes() -> date:
     """Siempre un lunes estrictamente futuro: el motor no recorta el día por reloj."""
-    dia = date.today() + timedelta(days=1)
-    while dia.weekday() != 0:
-        dia += timedelta(days=1)
-    return dia
+    return lunes_que_viene(date.today())
 
 
 async def id_servicio(client: AsyncClient, nombre: str) -> str:
@@ -193,14 +200,23 @@ async def test_servicio_desactivado_no_se_puede_consultar(client: AsyncClient, d
 
 
 async def test_el_cambio_de_horario_no_descoloca_las_horas(client: AsyncClient, doctor: dict):
-    """26-oct-2026: Madrid ya está en invierno (+01). La cita sigue tapando sus 10:00 locales."""
-    lunes_invierno = date(2026, 10, 26)
-    diez_utc = datetime.combine(lunes_invierno, time(10, 0), tzinfo=ZoneInfo("Europe/Madrid")).astimezone(UTC)
-    assert diez_utc.hour == 9  # una hora antes que en verano
+    """El lunes tras el cambio de horario: la cita sigue tapando sus 10:00 de hora de pared.
+
+    La fecha se calcula sobre el calendario real; si el próximo cambio cae fuera de los 60 días
+    reservables no hay hueco donde probarlo y el test se salta, en vez de fallar por el día.
+    """
+    pareja = lunes_del_cambio_de_horario(date.today())
+    if pareja is None:
+        pytest.skip("El próximo cambio de horario de Madrid cae fuera del horizonte reservable")
+    antes, lunes_tras_el_cambio = pareja
+    # La prueba de que el par cruza de verdad el cambio: la misma hora de pared, distinto UTC.
+    assert utc_de_esa_hora_local(antes, time(10, 0)) != utc_de_esa_hora_local(lunes_tras_el_cambio, time(10, 0))
+
+    diez_utc = utc_de_esa_hora_local(lunes_tras_el_cambio, time(10, 0))
     await insertar_cita(doctor["id"], inicio_utc=diez_utc, duracion=30)
-    dia = (await huecos_de(client, doctor["slug_unico"], await id_servicio(client, "Revisión"), desde=lunes_invierno))[
-        "dias"
-    ][0]
+    dia = (
+        await huecos_de(client, doctor["slug_unico"], await id_servicio(client, "Revisión"), desde=lunes_tras_el_cambio)
+    )["dias"][0]
     assert "10:00" not in inicios(dia) and "11:00" in inicios(dia)
     assert len(dia["huecos"]) == 31
 

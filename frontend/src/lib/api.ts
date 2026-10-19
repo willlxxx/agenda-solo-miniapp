@@ -1,5 +1,6 @@
 import type {
 	AgendaVentana,
+	AvisosHueco,
 	Cita,
 	CitaAgenda,
 	DiaBloqueado,
@@ -11,6 +12,7 @@ import type {
 	Franja,
 	ListaDeEsperaPublica,
 	ListaEspera,
+	ReservaAsistida,
 	Servicio
 } from '#lib/types';
 
@@ -97,5 +99,11 @@ export const api = {
 		request<ListaEspera>(`/waitlist?filtro=${filtro}`),
 	marcarLista: (id: string, estado: 'en_espera' | 'contactada') =>
 		request<EntradaLista>(`/waitlist/${id}`, { method: 'PATCH', body: JSON.stringify({ estado }) }),
-	quitarLista: (id: string) => request<void>(`/waitlist/${id}`, { method: 'DELETE' })
+	quitarLista: (id: string) => request<void>(`/waitlist/${id}`, { method: 'DELETE' }),
+
+	// Avisos de hueco: es lectura (cruza la lista con la disponibilidad real) y el envío lo hace él.
+	encajes: (dias = 21) => request<AvisosHueco>(`/waitlist/encajes?dias=${dias}`),
+	// El hueco se revalida en el servidor con el mismo motor: si ya no está libre, devuelve 409.
+	reservarPorEl: (id: string, datos: { fecha: string; hora: string }) =>
+		request<ReservaAsistida>(`/waitlist/${id}/reservar`, json(datos))
 };

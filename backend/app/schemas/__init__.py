@@ -249,6 +249,9 @@ class EntradaLista(BaseModel):
     estado: str
     # El instante real de la petición: la lista se atiende por orden de llegada.
     pedido_utc: datetime
+    # Cuándo le avisamos (y con qué hueco), para no insistir dos veces sobre la misma fila.
+    avisado_utc: datetime | None
+    hueco_ofrecido_utc: datetime | None
 
 
 class ListaEspera(BaseModel):
@@ -261,3 +264,62 @@ class ListaEspera(BaseModel):
 
 class EstadoListaIn(BaseModel):
     estado: Literal["en_espera", "contactada"]
+
+
+# --- Avisar de un hueco libre a quien espera ---
+
+
+class AvisoHueco(BaseModel):
+    """Petición pendiente + el hueco que ya le sirve, con el aviso escrito y sus enlaces.
+
+    El backend no manda nada: devolvemos `wa.me` y `mailto:` para que el médico lo envíe él
+    desde su propia cuenta. Por eso el mensaje habla de "hueco", no de cita confirmada.
+    """
+
+    id: UUID
+    nombre: str
+    telefono: str | None
+    email: str | None
+    servicio: str | None
+    # Lo que pidió, para que el médico sepa por qué este hueco es el suyo.
+    pidio_fecha: date | None
+    preferencia: str | None
+    # El hueco ofrecido, en la hora local del doctor: es lo que hay que escribirle.
+    fecha: date
+    inicio: time
+    fin: time
+    mensaje: str
+    # None cuando no podemos garantizar el formato (teléfono raro, sin email): el panel
+    # seguirá ofreciendo llamar y copiar el mensaje.
+    whatsapp: str | None
+    correo: str | None
+
+
+class AvisosHueco(BaseModel):
+    timezone: str
+    desde: date
+    hasta: date
+    # Cuántas pendientes hay y a cuántas se les puede ofrecer algo ahora mismo.
+    pendientes: int
+    con_hueco: int
+    avisos: list[AvisoHueco]
+
+
+class ReservaAsistidaIn(BaseModel):
+    """El médico escribe la cita por el paciente: solo falta el hueco, lo demás ya está guardado."""
+
+    fecha: date
+    hora: time
+
+
+class ReservaAsistida(BaseModel):
+    id: UUID
+    fecha: date
+    hora: time
+    fin: time
+    duracion_minutos: int
+    servicio: str
+    doctor: str
+    paciente: str
+    # La fila de la lista, ya cerrada como `contactada`, para pintar el cambio sin recargar.
+    entrada: EntradaLista

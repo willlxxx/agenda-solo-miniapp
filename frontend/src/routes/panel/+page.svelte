@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Agenda from '#lib/panel/Agenda.svelte';
+	import Avisos from '#lib/panel/Avisos.svelte';
 	import Horario from '#lib/panel/Horario.svelte';
 	import ListaDeEspera from '#lib/panel/ListaDeEspera.svelte';
 	import Servicios from '#lib/panel/Servicios.svelte';
@@ -38,6 +39,7 @@
 {/if}
 
 <Agenda />
+<Avisos />
 <ListaDeEspera />
 <Servicios />
 <Horario />

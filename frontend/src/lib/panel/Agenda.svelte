@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, ErrorApi } from '#lib/api';
+	import { panel } from '#lib/estado-panel.svelte';
 	import type { CitaAgenda, EstadoCita } from '#lib/types';
 
 	const NOMBRES = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
@@ -103,7 +104,9 @@
 
 	$effect(() => {
 		// Leer la clave es lo que ata el efecto al lunes mostrado: cada flecha recarga la ventana.
-		cargar(clave);
+		// `panel.version` entra igual: si otra sección guarda una cita (reservar por el paciente
+		// desde los avisos), esta semana se vuelve a leer en lugar de quedarse vieja.
+		if (panel.version >= 0) cargar(clave);
 	});
 
 	async function cambiar(cita: CitaAgenda, estado: EstadoCita) {

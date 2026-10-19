@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { api, ErrorApi } from '#lib/api';
+	import { panel } from '#lib/estado-panel.svelte';
 	import { PREFERENCIAS } from '#lib/types';
 	import type { EntradaLista, PreferenciaLista } from '#lib/types';
 
@@ -54,7 +55,9 @@
 	}
 
 	$effect(() => {
-		cargar();
+		// `panel.version` sube cuando se guarda una cita desde otra sección (los avisos reservan por
+		// el paciente): si no leyéramos la lista otra vez, la fila seguiría apareciendo como pendiente.
+		if (panel.version >= 0) cargar();
 	});
 
 	async function marcar(entrada: EntradaLista, estado: 'en_espera' | 'contactada') {

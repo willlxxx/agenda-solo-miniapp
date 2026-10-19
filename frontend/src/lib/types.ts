@@ -136,6 +136,10 @@ export type EntradaLista = {
 	preferencia: PreferenciaLista | null;
 	estado: 'en_espera' | 'contactada';
 	pedido_utc: string;
+	/** Cuándo le avisamos; null si sigue sin avisar. */
+	avisado_utc: string | null;
+	/** El hueco que le ofrecimos, para no insistir sobre la misma petición. */
+	hueco_ofrecido_utc: string | null;
 };
 
 export type ListaEspera = {
@@ -144,4 +148,49 @@ export type ListaEspera = {
 	contactadas: number;
 	filtro: 'pendientes' | 'contactadas' | 'todas';
 	entradas: EntradaLista[];
+};
+
+/**
+ * Una petición pendiente con el hueco real que ya le sirve, y el aviso escrito con sus enlaces.
+ * El backend no envía nada: `whatsapp` y `correo` son wa.me y mailto: que el médico abre desde su
+ * propia cuenta, así que no hay ningún tercero mandando mensajes por él.
+ */
+export type AvisoHueco = {
+	id: string;
+	nombre: string;
+	telefono: string | null;
+	email: string | null;
+	servicio: string | null;
+	/** Lo que pidió el paciente: por eso este hueco es suyo y no otro. */
+	pidio_fecha: string | null;
+	preferencia: PreferenciaLista | null;
+	fecha: string;
+	inicio: string;
+	fin: string;
+	mensaje: string;
+	whatsapp: string | null;
+	correo: string | null;
+};
+
+export type AvisosHueco = {
+	timezone: string;
+	desde: string;
+	hasta: string;
+	pendientes: number;
+	con_hueco: number;
+	avisos: AvisoHueco[];
+};
+
+/** Cita que el médico guarda por el paciente desde su panel. */
+export type ReservaAsistida = {
+	id: string;
+	fecha: string;
+	hora: string;
+	fin: string;
+	duracion_minutos: number;
+	servicio: string;
+	doctor: string;
+	paciente: string;
+	/** La fila de la lista, ya cerrada como `contactada`. */
+	entrada: EntradaLista;
 };

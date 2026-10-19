@@ -180,12 +180,49 @@ horizonte viene vacío, y con un "¿Ninguna hora te viene bien?" cuando sí las 
 La del doctor es `frontend/src/lib/panel/ListaDeEspera.svelte`, justo debajo de la agenda, con
 contadores por pestaña y un borrado que pide confirmar con un segundo clic.
 
+## Avisos de hueco libre (Semana 2)
+
+Cierra el círculo: quien estaba en la lista deja de estarlo porque el médico le ofrece una hora real
+y, si el paciente acepta, se la guarda él desde su propio panel.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/v1/waitlist/encajes?dias=21` | Cruza lo pendiente con la disponibilidad **real de este momento** y devuelve, por petición, el hueco que le sirve, el aviso ya redactado y sus enlaces. Es lectura: no reserva nada. |
+| `POST /api/v1/waitlist/{id}/reservar` | Escribe la cita con los datos que el paciente dejó al apuntarse, y cierra la fila como `contactada` con `avisado_en` y `hueco_ofrecido`. |
+
+**Cómo llega el aviso al paciente**: el panel abre `https://wa.me/…?text=…` o `mailto:…` con el texto
+escrito, o lo copia. El envío lo hace la cuenta del médico. No hay proveedor de mensajería, ni
+credenciales que guardar, ni terceros que declarar en la página pública: por eso el texto habla de
+"ha quedado un hueco", nunca de cita confirmada.
+
+Reglas:
+
+- **Un hueco, un aviso.** El encaje va por orden de llegada y va descontando la hora que ofrece
+  (`app/domain/encaje.py`), así que dos personas que piden lo mismo no reciben la misma mañana.
+- **Lo que se ofrece es lo que se puede reservar.** `/encajes` usa el mismo motor
+  (`calcular_disponibilidad`) y el mismo paso de rejilla que el enlace público; `/reservar` revalida
+  dentro del candado. Si alguien ocupó la hora mientras se escribía el WhatsApp, devuelve 409 y la
+  petición sigue pendiente.
+- **Un solo núcleo de escritura** (`app/services/reserva.py`): el enlace público y el panel llaman a
+  `reservar_hueco`, con el mismo `pg_advisory_xact_lock('agenda-cita:{doctor}')`. La columna
+  `appointments.origen` (`publico` | `panel`, con CHECK) dice de dónde vino cada cita: la del panel
+  la escribió el médico attestando una petición telefónica, no un clic del paciente.
+- **Reabrir una fila borra su aviso** (`avisado_en`/`hueco_ofrecido` a NULL): si el paciente dijo que
+  ese día no, vuelve a la cola limpia y el panel no insiste con lo mismo.
+- El teléfono tiene que ser internacionalizable para prometer un `wa.me`; si no lo es, el panel sigue
+  ofreciendo llamar, correo y copiar, pero no inventa un enlace.
+
+En el panel es la sección "Huecos para quien espera" (`frontend/src/lib/panel/Avisos.svelte`), entre
+la agenda y la lista. Al reservar por el paciente, `estado-panel.svelte.ts` avisa a las otras dos
+secciones para que vuelvan a leer: si no, la cita aparecería arriba con retraso y la fila seguiría
+pendiente abajo.
+
 ## Siguiente paso
 
-El paciente reserva, el doctor gestiona su semana y recoge a quien se quedó sin hueco. Lo que falta:
+El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco y le ofrece una
+hora real cuando la hay. Lo que falta:
 
-- **From waitlist to cita** (Semana 2-3): hoy el doctor llama y marca "avisado"; falta poder
-  convertir esa petición en una cita suya con un clic desde el panel.
 - **Recordatorios** 24 h / 1 h antes (APScheduler o Redis; `timestamptz` ya está bien para calcularlos).
 - Antes de publicar: generar un `JWT_SECRET` nuevo (el de `backend/.env` es de desarrollo y ese
-  archivo nunca se sube), y decidir el proveedor de SMS/email para los recordatorios.
+  archivo nunca se sube), y decidir el proveedor de SMS/email si algún día queremos avisos automáticos
+  en lugar de los enlaces manuales de ahora.

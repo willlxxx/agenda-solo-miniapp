@@ -30,6 +30,12 @@ ESTADOS_CITA = ("confirmada", "completada", "no_vino", "cancelada")
 UNIQUE_EN_ESPERA = "en_espera"
 ESTADOS_LISTA = ("en_espera", "contactada")
 
+# De dónde salió una cita: el enlace público o el panel del médico reservando por teléfono.
+# Cambia cómo se obtuvo el consentimiento, no el estado de la agenda.
+ORIGEN_PUBLICO = "publico"
+ORIGEN_PANEL = "panel"
+ORIGENES_CITA = (ORIGEN_PUBLICO, ORIGEN_PANEL)
+
 
 class Doctor(Base):
     __tablename__ = "doctors"
@@ -102,6 +108,7 @@ class Appointment(Base):
     __tablename__ = "appointments"
     __table_args__ = (
         CheckConstraint("estado IN ('confirmada','completada','no_vino','cancelada')", name="ck_appointment_estado"),
+        CheckConstraint(f"origen IN ('{ORIGEN_PUBLICO}','{ORIGEN_PANEL}')", name="ck_appointment_origen"),
         # Índice parcial: base del motor de disponibilidad y de la protección anti-dobles-reservas.
         Index(
             "ix_appointments_doctor_fecha_confirmada",
@@ -120,6 +127,8 @@ class Appointment(Base):
     # Congelado al reservar: editar el servicio después no altera citas históricas.
     duracion_minutos: Mapped[int] = mapped_column(Integer, nullable=False)
     estado: Mapped[str] = mapped_column(Text, nullable=False, server_default=UNIQUE_CONFIRMADA)
+    # 'publico' = el paciente la autoclictó desde su enlace; 'panel' = la hizo el médico por él.
+    origen: Mapped[str] = mapped_column(Text, nullable=False, server_default=ORIGEN_PUBLICO)
     # GDPR: evidencia de consentimiento explícito en el momento de la reserva.
     consentimiento_ok_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recordatorio_24h_enviado: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
@@ -170,4 +179,8 @@ class Waitlist(Base):
     # Textual porque la columna ya existía así: 'manana' | 'tarde' | 'cualquier_hora'.
     preferencia_horaria: Mapped[str | None] = mapped_column(Text)
     estado: Mapped[str] = mapped_column(Text, nullable=False, server_default=UNIQUE_EN_ESPERA)
+    # El hueco concreto que le ofrecimos y cuándo. Nullables: nadie avisa dos veces sin querer,
+    # y si reabrimos la fila (cambia de día) se limpian para volver a contarla como pendiente.
+    avisado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hueco_ofrecido: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

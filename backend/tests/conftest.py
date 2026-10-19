@@ -6,10 +6,13 @@ parciales, advisory locks), así que no simulamos la base de datos.
 """
 
 import asyncio
+import calendar
 import os
 import uuid
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 DEFAULT_URLS = {
     "admin": "postgresql://postgres@127.0.0.1:5433/postgres",
@@ -96,6 +99,55 @@ async def client(limpio, _database: str):
 
 
 # --- Helpers ---
+
+MADRID = ZoneInfo("Europe/Madrid")
+
+
+def lunes_que_viene(desde: date) -> date:
+    """El primer lunes DESPUÉS de `desde`, que nunca es hoy.
+
+    Los tests de reserva piden las 09:00 de un lunes. Si el lunes es hoy, a partir de las 08:30
+    el hueco ya está dentro de la anticipación mínima y el backend hace bien en rechazarlo: el
+    test fallaría según la hora a la que se ejecute, no según el código.
+    """
+    dia = desde + timedelta(days=1)
+    while dia.weekday() != 0:
+        dia += timedelta(days=1)
+    return dia
+
+
+def _ultimo_domingo_de(año: int, mes: int) -> date:
+    dia = calendar.monthrange(año, mes)[1]
+    while date(año, mes, dia).weekday() != 6:
+        dia -= 1
+    return date(año, mes, dia)
+
+
+def lunes_del_cambio_de_horario(desde: date) -> tuple[date, date] | None:
+    """(lunes antes, lunes después) del próximo cambio de horario de Madrid, o None si queda lejos.
+
+    En el huso peninsular se cambia el último domingo de marzo y de octubre, así que esos dos
+    lunes son los que pueden demostrar que la hora local se traduce con el huso del doctor al
+    reservar, no al pintar. Devolvemos None cuando el cambio cae fuera del horizonte reservable:
+    desde la API no habría nada que probar y el test se salta en vez de fallar.
+    """
+    from app.services.reserva import MAX_DIAS
+
+    for año in (desde.year, desde.year + 1):
+        for mes in (3, 10):
+            domingo = _ultimo_domingo_de(año, mes)
+            antes, despues = domingo - timedelta(days=6), domingo + timedelta(days=1)
+            if antes <= desde:
+                continue
+            if (despues - desde).days > MAX_DIAS:
+                return None
+            return antes, despues
+    return None
+
+
+def utc_de_esa_hora_local(fecha: date, hora: time) -> datetime:
+    """La misma hora de pared en UTC, con el huso de Madrid de ESE día (DST incluido)."""
+    return datetime.combine(fecha, hora, tzinfo=MADRID).astimezone(UTC)
 
 DOCTOR_GARCIA = {
     "nombre": "Dra. García Peña",
