@@ -413,7 +413,8 @@
 					<input id="consentimiento" type="checkbox" bind:checked={consentimiento} />
 					<span>
 						Acepto que {data.doctor.nombre} guarde mi nombre, teléfono y esta cita para
-						gestionar mi reserva. No guardamos nada de tu salud: solo el tipo de visita.
+						gestionar mi reserva, y que use el email que escriba solo para recordármela.
+						No guardamos nada de tu salud: solo el tipo de visita.
 						Puedes pedir que se borre escribiéndole.
 					</span>
 				</label>
@@ -426,7 +427,18 @@
 					<p class="error" role="alert">{error}</p>
 				{/if}
 			</form>
-			<p class="aviso">Te recordamos la cita un día antes.</p>
+			{#if correo}
+				<!-- El recordatorio es por email y solo si lo dejó: prometer un aviso que no puede
+					llegar sería peor que no prometerlo. -->
+				<p class="aviso">
+					Te avisaremos a {correo} un día antes y otra vez una hora antes de la cita. Es
+					automático, y puedes pedir que deje de llegarte escribiendo a {data.doctor.nombre}.
+				</p>
+			{:else}
+				<p class="aviso">
+					Si nos dejas un email arriba, te avisamos un día antes y una hora antes de la cita.
+				</p>
+			{/if}
 		{:else}
 			<h2>Cita reservada</h2>
 			<div class="tarjeta resumen">

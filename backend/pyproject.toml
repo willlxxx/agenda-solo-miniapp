@@ -21,6 +21,8 @@ dependencies = [
     "pydantic-settings>=2.6",
     "pydantic>=2.10",
     "httpx>=0.27",
+    # SMTP es síncrono: sale del event loop con anyio.to_thread en vez de bloquear la API.
+    "anyio>=4.5",
     # Europe/Madrid etc. salen de aquí en Windows; en Linux Railway ya hay /usr/share/zoneinfo.
     "tzdata>=2024.1",
 ]

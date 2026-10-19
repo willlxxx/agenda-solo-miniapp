@@ -116,6 +116,12 @@ class Appointment(Base):
             "fecha_hora",
             postgresql_where=text(f"estado = '{UNIQUE_CONFIRMADA}'"),
         ),
+        # El barrido del cron de recordatorios va por fecha sin conocer al doctor.
+        Index(
+            "ix_appointments_fecha_hora_confirmada",
+            "fecha_hora",
+            postgresql_where=text(f"estado = '{UNIQUE_CONFIRMADA}'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
@@ -133,6 +139,11 @@ class Appointment(Base):
     consentimiento_ok_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     recordatorio_24h_enviado: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     recordatorio_1h_enviado: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    # Cuándo salió cada aviso de verdad. Nullables: una cita antigua ya tenía su booleano sin fecha.
+    recordatorio_24h_enviado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recordatorio_1h_enviado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Intentos fallidos acumulados: el despacho se rinde tras unos pocos, no reintenta cada pasada.
+    recordatorio_intentos: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

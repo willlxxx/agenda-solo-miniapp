@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Cookie, Depends, HTTPException, status
@@ -10,6 +11,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import SessionLocal
 from app.models import Doctor
 from app.security import decodificar_token
+from app.services.correo import Proveedor, proveedor_desde_configuracion
+
+
+async def get_ahora() -> datetime:
+    """El reloj de la pasada, en UTC.
+
+    Es dependencia por una razón práctica: el despacho decide qué se manda según la hora, y sin esta
+    costura no se podría probar una pasada de las 03:00 de la madrugada sin esperar a que el CI corra
+    a las 03:00. El valor real es `now()`: nadie la pisa en producción.
+    """
+    return datetime.now(UTC)
+
+
+async def get_proveedor_correo() -> Proveedor:
+    """El canal de salida de los recordatorios, el que diga `.env`.
+
+    Es dependencia y no una llamada suelta dentro del endpoint por los tests: así pueden inyectar
+    el proveedor simulado y probar el despacho entero sin credenciales ni mensajes reales. Un SMTP
+    mal configurado es 503, no 500: el cron tiene que leer qué le falta al despliegue.
+    """
+    try:
+        return proveedor_desde_configuracion()
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 def zona_del(doctor: Doctor) -> ZoneInfo:

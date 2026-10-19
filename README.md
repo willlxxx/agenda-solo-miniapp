@@ -217,12 +217,80 @@ la agenda y la lista. Al reservar por el paciente, `estado-panel.svelte.ts` avis
 secciones para que vuelvan a leer: si no, la cita aparecería arriba con retraso y la fila seguiría
 pendiente abajo.
 
+## Recordatorios automáticos (Semana 2)
+
+El único mensaje que sale solo de la agenda. Lo que se avisaba a mano desde el panel (huecos libres)
+sigue siendo manual; aquí lo que se automatiza es el "mañana tienes cita", porque es idéntico para
+todos y no necesita a nadie delante.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `POST /api/v1/internal/recordatorios` | Una pasada del cron: busca las citas confirmadas cuyo adelanto está en ventana, redacta los avisos y los entrega. Devuelve contadores (`enviados_24h`, `enviados_1h`, `omitidos`, `errores`, `agotados`…), nunca datos del paciente. Hay que mandar la cabecera `x-cron-secret`. |
+
+No sale en `/docs` y está **apagado sin `CRON_SECRET`** (503): es una ruta que escribe en la agenda y
+envía correos a pacientes.
+
+**Por qué un endpoint y un cron de fuera, y no un planificador dentro del proceso**: Railway reinita
+el contenedor cuando quiere, un scheduler en memoria pierde las pasadas y se duplica entre
+instancias, y no hay forma de forzar una pasada a mano. Con `curl` desde fuera, la idempotencia la
+dan las banderas de la base de datos: se puede lanzar dos veces el mismo minuto sin escribirle dos
+veces a nadie.
+
+```bash
+curl -sS -X POST "$AGENDA_URL/api/v1/internal/recordatorios" \
+  -H "x-cron-secret: $CRON_SECRET"
+```
+
+Cada 15 minutos basta con las ventanas de 24 h y 1 h. En Railway: un servicio *cron* con ese comando
+(su variable de entorno con el secreto); en cualquier otro sitio, un crontab o una GitHub Action
+programada. Con `RECORDATORIOS_PROVEEDOR=simulado` (el defecto) no se envía nada: la pasada decide,
+redacta y marca, pero el correo se queda en el proveedor simulado. Es lo que corre en desarrollo y en
+los tests.
+
+Reglas:
+
+- **Ventana, no instante.** El aviso de 24 h vale mientras el adelanto esté entre 12 y 24 h, y el de
+  1 h entre 40 y 60 minutos. Un cron que se salta un tick no pierde el aviso; uno que estuvo caído
+  tres días no manda un "mañana tienes cita" sobre una cita ya pasada.
+- **Horas de silencio 08:00–21:00 en el huso del doctor.** Un recordatorio a las 03:00 es una queja
+  segura. Si la ventana entera cae de madrugada, ese aviso no sale y la bandera queda sin marcar:
+  la pasada siguiente podrá mandarlo mientras esté en ventana.
+- **Candado por doctor** (`pg_advisory_xact_lock('recordatorios:{doctor}')`), clave distinta de la de
+  las citas. Dentro del candado se vuelven a leer las banderas: si otra pasada ya mandó el aviso,
+  cuenta como `omitidos` y no se repite.
+- **El fallo no marca nada.** Si el proveedor no entrega, la bandera sigue en `false` y
+  `recordatorio_intentos` suma uno; a los 3 intentos la cita se da por perdida (`agotados`) en vez
+  de reintentar cada cuarto de hora contra un SMTP caído.
+- **Nada que no podamos cumplir.** El texto ofrece el teléfono del médico si lo hay; si no, dice
+  "avísanos". No hay enlace de anular ni botón de confirmar: eso sería prometer un flujo que no
+  existe.
+- **Sin email no hay recordatorio.** El campo es opcional en la página pública, y el canal es correo:
+  una cita sin dirección aparece como `sin_correo` y no se intenta escribir a ningún sitio.
+
+Declaración de terceros (GDPR): el envío sale del **SMTP que configure cada doctor**
+(`SMTP_HOST`/`SMTP_DE` en `backend/.env`), no de un servicio de mensajería de terceros. La página
+pública declara la finalidad en la casilla de consentimiento ("que use el email que escriba solo para
+recordármela") y bajo el formulario dice exactamente qué se va a mandar y a qué dirección; borrar la
+ficha del paciente borra el email, y por tanto el recordatorio. Retención: 6–12 meses como el resto
+de la agenda.
+
+Está en `app/domain/recordatorios.py` (decidir y redactar, sin BD ni SMTP), `app/services/despacho.py`
+(leer, candar, entregar, marcar) y `app/services/correo.py` (`Simulado` y `Smtp` con la librería
+estándar dentro de un hilo). Se prueba en `tests/test_recordatorios.py`, con fechas y reloj fijos:
+corra el CI a la hora que corra, la pasada de las 04:00 de la madrugada se sigue comprobando a las
+04:00.
+
 ## Siguiente paso
 
-El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco y le ofrece una
-hora real cuando la hay. Lo que falta:
+El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco, le ofrece una
+hora real cuando la hay, y el paciente recibe el aviso de su cita sin que nadie lo escriba. Lo que
+falta:
 
-- **Recordatorios** 24 h / 1 h antes (APScheduler o Redis; `timestamptz` ya está bien para calcularlos).
-- Antes de publicar: generar un `JWT_SECRET` nuevo (el de `backend/.env` es de desarrollo y ese
-  archivo nunca se sube), y decidir el proveedor de SMS/email si algún día queremos avisos automáticos
-  en lugar de los enlaces manuales de ahora.
+- **Antes de publicar**: generar un `JWT_SECRET` nuevo y un `CRON_SECRET` (los de `backend/.env` son
+  de desarrollo y ese archivo nunca se sube), montar el cron con `curl`, y poner el SMTP real del
+  doctor (`RECORDATORIOS_PROVEEDOR=smtp` + `SMTP_HOST`/`SMTP_DE`). Sin esas cuatro cosas la agenda
+  funciona y no envía nada.
+- Panel: ver el estado de los avisos de cada cita (cuándo se recordó) para poder responder a
+  "no me avisasteis" sin ir a la base de datos.
+- Fase 2 del documento, todavía fuera: pagos, Google Calendar, integración con el software dental.
+

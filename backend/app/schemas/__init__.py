@@ -323,3 +323,30 @@ class ReservaAsistida(BaseModel):
     paciente: str
     # La fila de la lista, ya cerrada como `contactada`, para pintar el cambio sin recargar.
     entrada: EntradaLista
+
+
+# --- Recordatorios automáticos (despacho interno para el cron) ---
+
+
+class ResumenRecordatorios(BaseModel):
+    """Lo que hizo una pasada del cron: contadores, nunca datos del paciente.
+
+    Quien monta el cron necesita saber si funcionó, no leer la agenda de otro doctor, así que aquí
+    no salen nombres ni correos. Los contadores separan los tres silencios distintos que hay:
+    `sin_correo` (no se puede), `omitidos` (otro proceso ya lo mandó) y `agotados` (dejamos de
+    reintentar).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    proveedor: str
+    candidatas: int
+    sin_correo: int
+    planificados: int
+    enviados: int
+    enviados_24h: int
+    enviados_1h: int
+    omitidos: int
+    errores: int
+    agotados: int
+    husos_invalidos: int
