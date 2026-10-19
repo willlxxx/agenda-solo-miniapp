@@ -230,6 +230,26 @@ async def test_completada_futura_no_inventa_una_ultima_visita(client: AsyncClien
     assert filas[0][0] is None
 
 
+async def test_completada_por_delante_hoy_tampoco_inventa_la_ultima_visita(
+    client: AsyncClient, doctor: dict
+) -> None:
+    """El caso que dependía del reloj: una cita de HOY que aún no ha llegado.
+
+    sembrar() pone el instante a +90 min, así que la prueba es la misma a las 8:00 que a las
+    23:00: el médico se ha adelantado al marcar "Completada" y la ficha no puede quedar con una
+    visita que todavía no ocurrió.
+    """
+    servicio = await servicio_id(client)
+    await reservar(client, doctor["slug_unico"], servicio)
+    paciente = (await sql_filas("select id from patients where doctor_id = cast(:d as uuid)", d=doctor["id"]))[0][0]
+    aun_no = datetime.now(MADRID) + timedelta(minutes=90)
+    id_ = await sembrar(doctor["id"], inicio_utc=aun_no.astimezone(UTC), servicio=servicio, paciente=paciente)
+
+    assert (await client.patch(f"/api/v1/appointments/{id_}", json={"estado": "completada"})).status_code == 200
+    filas = await sql_filas("select ultima_visita from patients where id = cast(:p as uuid)", p=paciente)
+    assert filas == [(None,)]
+
+
 async def test_cancelar_devuelve_el_hueco_a_la_disponibilidad(client: AsyncClient, doctor: dict):
     servicio = await servicio_id(client)
     slug = doctor["slug_unico"]

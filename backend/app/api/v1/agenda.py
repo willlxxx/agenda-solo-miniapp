@@ -125,13 +125,14 @@ async def cambiar_estado(
 
     cita.estado = datos.estado
 
-    # Última visita: solo se apunta cuando la cita realmente ocurrió, nunca al cancelar.
+    # Última visita: solo se apunta cuando el instante de la cita ya pasó de verdad. Compara el
+    # instante, no el día: el doctor puede marcar "Completada" una cita de hoy que aún no ha
+    # llegado (se adelanta, o la reubica) y eso no debe inventar una visita futura.
     if datos.estado == "completada" and cita.patient_id is not None:
         paciente = await session.get(Patient, cita.patient_id)
         if paciente is not None:
-            local = cita.fecha_hora.astimezone(zona)
-            if local.date() <= datetime.now(zona).date():
-                paciente.ultima_visita = local.date()
+            if cita.fecha_hora <= datetime.now(UTC):
+                paciente.ultima_visita = cita.fecha_hora.astimezone(zona).date()
 
     await session.commit()
     await session.refresh(cita)
