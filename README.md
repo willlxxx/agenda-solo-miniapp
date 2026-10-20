@@ -730,11 +730,12 @@ que el proceso prefirió no abrir el puerto antes que servir un sitio público c
 Con el `token_urlsafe(32)` puesto, el servicio está activo desde entonces y en el log no aparece ningún
 `aviso de despliegue`.
 
-El **cron** dio nueve pasadas y cada una arranca el contenedor, imprime una línea y termina, sin reiniciarse:
-sobre el despliegue viejo 02:29 (lanzada a mano con *Run now*), 02:32, 02:45 y 03:01 (automáticas del
-horario); sobre la imagen nueva 03:20 (a mano), 03:32, 03:46, 04:00 y 04:17 (automáticas, con saltos de 12 a 17
-minutos porque el horario del host no es un metrónomo). Todas con 200 y sus contadores, y los contadores
-cuentan una historia seguida:
+El **cron** dio once pasadas desde que se montó (de 02:29 a 04:47, hora del panel en GMT-4) y cada una arranca
+el contenedor, imprime una línea y termina, sin reiniciarse: cuatro sobre el despliegue viejo —02:29 lanzada a
+mano con *Run now*, y 02:32, 02:45 y 03:01 automáticas—, seis sobre la imagen que ya lleva `scripts/salud.py`
+(03:20 a mano; 03:32, 03:46, 04:00, 04:17 y 04:31 automáticas) y una sobre el último despliegue, la de 04:47.
+Entre automáticas hay saltos de 12 a 17 minutos, porque el horario del host no es un metrónomo. Todas con 200 y
+sus contadores, y los contadores cuentan una historia seguida:
 
 ```
 02:29  recordatorios 200: {"candidatas": 1, "planificados": 0, "enviados": 0, "enviados_1h": 0,
@@ -745,7 +746,7 @@ cuentan una historia seguida:
 03:32  recordatorios 200: {"candidatas": 0, "planificados": 0, "enviados": 0, ...}
 ```
 
-(03:46, 04:00 y 04:17 repiten la línea de 03:32 tal cual; `husos_invalidos`, `sin_correo` y el
+(03:46, 04:00, 04:17, 04:31 y 04:47 repiten la línea de 03:32 tal cual; `husos_invalidos`, `sin_correo` y el
 `proveedor: "simulado"` van en todas y aquí están cortados por legibilidad).
 Hasta las 03:01 la pasada barría la única cita confirmada de la base real y el dominio decidía callar:
 `candidatas: 1` con `planificados: 0` es una cita dentro del rango de lectura pero fuera de las dos ventanas de
@@ -765,10 +766,11 @@ no habría contadores que leer), `API_URL` apunta al servicio web, y la pasada l
 quien lo repita: el visor del cron devuelve «No logs in this time range» con la ventana de 1 s que trae el
 enlace de la ejecución; pidiendo en la URL una franja más ancha, las líneas salen.
 
-Tras empujar las correcciones de este commit, el host volvió a construir **los dos servicios** solos
+Tras empujar esas correcciones, el host volvió a construir **los dos servicios** solos
 (`agenda-solo-miniapp` ACTIVE y `cron-avisos` completado a las 03:15 GMT-4), así que la agenda pública y el
-disparador ya corren sobre la imagen con `scripts/salud.py`; las cinco pasadas que van de 03:20 a 04:17 son
-suyas. El lado de la API lo confirma por su cuenta: en su log se lee `152.55.185.210… "POST
+disparador ya corren sobre la imagen con `scripts/salud.py`; las siete pasadas que van de 03:20 a 04:47 son de
+esas imágenes, y un segundo rebuild posterior al último commit documentó la de 04:47 con `recordatorios 200`.
+El lado de la API lo confirma por su cuenta: en su log se lee `152.55.185.210… "POST
 /api/v1/internal/recordatorios" 200 OK` a las 03:20, con otra IP distinta de la de los `GET` de esta máquina.
 
 **Lo que sigue sin probar**, para que tampoco cuente: que un correo llegue a un paciente de verdad —con
