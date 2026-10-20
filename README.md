@@ -730,30 +730,62 @@ que el proceso prefirió no abrir el puerto antes que servir un sitio público c
 Con el `token_urlsafe(32)` puesto, el servicio está activo desde entonces y en el log no aparece ningún
 `aviso de despliegue`.
 
-El **cron** dio tres pasadas (una lanzada a mano con *Run now* y dos automáticas del horario): cada una
-arranca el contenedor, imprime una línea y termina, sin reiniciarse. La línea fue
-`recordatorios 200: {"candidatas": 1, "planificados": 0, "enviados": 0, "enviados_1h": 0,
-"enviados_24h": 0, "omitidos": 0, "agotados": 0, "errores": 0, "sin_correo": 0, "husos_invalidos": 0,
-"proveedor": "simulado"}`. Un 200 con contadores es lo que tenía que dar: la Reference del secreto se
-resolvió (con 401 o 503 se habría notado), `API_URL` apunta al servicio web, y la pasada leyó la agenda
-real. `candidatas: 1` con `planificados: 0` no es un fallo: la única cita confirmada estaba fuera de las
-dos ventanas de adelanto (24 h pide entre 12 y 24 h de margen, 1 h pide entre 40 y 60 minutos) o dentro
-de la franja de silencio del huso del doctor; en ambos casos el dominio decide callar y el siguiente tick
-vuelve a intentarlo.
+El **cron** dio nueve pasadas y cada una arranca el contenedor, imprime una línea y termina, sin reiniciarse:
+sobre el despliegue viejo 02:29 (lanzada a mano con *Run now*), 02:32, 02:45 y 03:01 (automáticas del
+horario); sobre la imagen nueva 03:20 (a mano), 03:32, 03:46, 04:00 y 04:17 (automáticas, con saltos de 12 a 19
+minutos porque el horario del host no es un metrónomo). Todas con 200 y sus contadores, y los contadores
+cuentan una historia seguida:
 
-**Lo que sigue sin probar**, para que tampoco cuente: que un correo llegue a un paciente de verdad
-(mientras `RECORDATORIOS_PROVEEDOR=simulado` el aviso se registra en la base y no sale), el SMTP real del
-doctor, un dominio propio en lugar del `*.up.railway.app`, la ruta de limpieza —que sigue apagada a
-propósito— y el coste del plan con los dos servicios. Falta además la prueba que solo se puede hacer con
-la agenda por delante: ver en el log del cron una pasada con `enviados_24h: 1`, es decir, que a una cita
-real le llegue su aviso cuando entre en la ventana de 24 h. No hay que escribir nada para verla: basta con
-que exista una cita a menos de un día y esperar al tick.
+```
+02:29  recordatorios 200: {"candidatas": 1, "planificados": 0, "enviados": 0, "enviados_1h": 0,
+                           "enviados_24h": 0, "omitidos": 0, "agotados": 0, "errores": 0, ...}
+03:01  recordatorios 200: {"candidatas": 1, "planificados": 1, "enviados": 1, "enviados_1h": 1,
+                           "enviados_24h": 0, "omitidos": 0, "agotados": 0, "errores": 0, ...}
+03:20  recordatorios 200: {"candidatas": 1, "planificados": 0, "enviados": 0, ...}
+03:32  recordatorios 200: {"candidatas": 0, "planificados": 0, "enviados": 0, ...}
+```
+
+(03:46, 04:00 y 04:17 repiten la línea de 03:32 tal cual; `husos_invalidos`, `sin_correo` y el
+`proveedor: "simulado"` van en todas y aquí están cortados por legibilidad).
+Hasta las 03:01 la pasada barría la única cita confirmada de la base real y el dominio decidía callar:
+`candidatas: 1` con `planificados: 0` es una cita dentro del rango de lectura pero fuera de las dos ventanas de
+adelanto (24 h pide entre 12 y 24 h de margen, 1 h entre 40 y 60 minutos), o dentro de la franja de silencio del
+huso del doctor. A las 03:01 entró en la ventana de 1 h y esa pasada hizo el recorrido completo:
+`planificados: 1, enviados: 1, enviados_1h: 1` —leyó la agenda, decidió, entregó al proveedor y escribió la
+bandera con su marca de tiempo en el PostgreSQL del host. Con `RECORDATORIOS_PROVEEDOR=simulado` la entrega es
+el registro interno, no un correo que alguien recibió: lo probado es el viaje hasta la bandera, y lo que sigue
+sin probar es que el SMTP del doctor escriba de verdad. La línea de 03:20 vuelve a ver la cita y ya no planea
+nada porque la bandera de 1 h está puesta: el dominio la mira antes de decidir, y dentro del lock se revalida
+por si otra pasada acaba de ponerla. A las 03:32 la lectura ya no la alcanza (`candidatas: 0`) porque caía por
+debajo del adelanto mínimo de las ventanas, o porque ya había pasado. Lo que esa bandera pinta en la
+mini-ficha del panel y en el export hace falta verlo con la sesión del doctor.
+
+Un 200 con contadores es además la prueba de los enchufes: la Reference del secreto se resolvió (con 401 o 503
+no habría contadores que leer), `API_URL` apunta al servicio web, y la pasada leyó la base real. Un aviso para
+quien lo repita: el visor del cron devuelve «No logs in this time range» con la ventana de 1 s que trae el
+enlace de la ejecución; pidiendo en la URL una franja más ancha, las líneas salen.
+
+Tras empujar las correcciones de este commit, el host volvió a construir **los dos servicios** solos
+(`agenda-solo-miniapp` ACTIVE y `cron-avisos` completado a las 03:15 GMT-4), así que la agenda pública y el
+disparador ya corren sobre la imagen con `scripts/salud.py`; las cinco pasadas que van de 03:20 a 04:17 son
+suyas. El lado de la API lo confirma por su cuenta: en su log se lee `152.55.185.210… "POST
+/api/v1/internal/recordatorios" 200 OK` a las 03:20, con otra IP distinta de la de los `GET` de esta máquina.
+
+**Lo que sigue sin probar**, para que tampoco cuente: que un correo llegue a un paciente de verdad —con
+`RECORDATORIOS_PROVEEDOR=simulado`, que es como está a propósito, el aviso se registra en la base y no sale—,
+el SMTP real del doctor, un dominio propio en lugar del
+`*.up.railway.app`, la ruta de limpieza —que sigue apagada a propósito— y el coste del plan con los dos
+servicios. Faltan dos comprobaciones que solo se ven con la agenda por delante: en el log del cron, una pasada
+con `enviados_24h: 1` —la ventana de 1 h ya dio su `enviados_1h: 1`, así que se sabe exactamente qué buscar—, y
+en el panel del doctor, con su sesión, la mini-ficha de esa cita mostrando el aviso registrado. Ninguna de las
+dos exige escribir código: basta con tener una cita a menos de un día y esperar al tick.
 
 ## Siguiente paso
 
 El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco, le ofrece una
-hora real cuando la hay, y el paciente recibe el aviso de su cita sin que nadie lo escriba. Lo que
-falta:
+hora real cuando la hay, y el aviso de la cita se decide, se entrega y se marca solo en cada pasada del cron:
+en la base real ya pasó una vez (`enviados_1h: 1` a las 03:01), con el proveedor simulado, o sea sin que un
+correo saliera. Lo que falta:
 
 - **Publicado está**: el host (Railway), la imagen construida por el host, la base del host migrada, el
   healthcheck y el cron de avisos cada quince minutos, todo ello visto en los logs de arriba. En esa base
