@@ -732,7 +732,7 @@ Con el `token_urlsafe(32)` puesto, el servicio está activo desde entonces y en 
 
 El **cron** dio nueve pasadas y cada una arranca el contenedor, imprime una línea y termina, sin reiniciarse:
 sobre el despliegue viejo 02:29 (lanzada a mano con *Run now*), 02:32, 02:45 y 03:01 (automáticas del
-horario); sobre la imagen nueva 03:20 (a mano), 03:32, 03:46, 04:00 y 04:17 (automáticas, con saltos de 12 a 19
+horario); sobre la imagen nueva 03:20 (a mano), 03:32, 03:46, 04:00 y 04:17 (automáticas, con saltos de 12 a 17
 minutos porque el horario del host no es un metrónomo). Todas con 200 y sus contadores, y los contadores
 cuentan una historia seguida:
 
