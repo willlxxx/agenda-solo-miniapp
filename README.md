@@ -22,9 +22,10 @@ Plan completo: [`PLAN-SEMANA-1.md`](PLAN-SEMANA-1.md).
 backend/   FastAPI: app/{models,schemas,api/v1}, alembic/, tests/
 frontend/  SvelteKit: landing, /auth/registro, /auth/acceso, /panel; el build estático lo sirve la API
 scripts/   arranque.sh (migración + uvicorn, el mismo dentro del contenedor), cron.py (el disparador que
-           lanza el cron del host), postgres.ps1 (PG local)
+           lanza el cron del host), salud.py (el sondeo del HEALTHCHECK, respeta PORT), postgres.ps1 (PG local)
 Dockerfile docker-compose.yml   el despliegue: una imagen con API + interfaz, y su PostgreSQL
-railway.toml railway.cron.toml  los dos servicios de Railway: la agenda y el aviso programado
+railway.toml railway.cron.toml  referencia de la configuración de los dos servicios de Railway; el host
+           no los lee en este proyecto (Config as Code obsoleto): se manda lo que dice el panel
 ```
 
 ## Ponerse en marcha
@@ -66,8 +67,8 @@ el comando del despliegue (abajo, «Publicarlo»).
 ## Pruebas
 
 ```bash
-cd backend && pytest -q          # 340 pruebas: 278 sobre PostgreSQL real (base agenda_test autogestionada)
-                                 # y 62 sin base: guardia de arranque, URL del host, estáticos y cron
+cd backend && pytest -q          # 351 pruebas: 278 sobre PostgreSQL real (base agenda_test autogestionada)
+                                 # y 73 sin base: guardia de arranque, URL del host, estáticos, cron y sondeo
 cd frontend && npm run check     # svelte-check, 0 errores
 ```
 
@@ -617,11 +618,17 @@ hilos dentro de un contenedor. Antes de nada, por tanto, `main` tiene que llevar
 lo de estas dos semanas.
 
 **1. El proyecto.** New Project → **Deploy from GitHub repo** → `willlxxx/agenda-solo-miniapp`. La primera
-vez pide instalar la app de Railway en el repo, y eso se hace con su cuenta. Railway usa el `Dockerfile`
-si lo encuentra en la raíz; `railway.toml` está para que no dependa de un autodetección y para fijar el
-arranque y el healthcheck. Ojo con una regla del host, verificada en su documentación: **«la
-configuración definida en código siempre gana a los valores del panel»** — si algo no cuadra, se cambia
-el archivo, no la pantalla.
+vez pide instalar la app de Railway en el repo, y eso se hace con su cuenta. Railway encontró el
+`Dockerfile` solo (builder «Dockerfile Automatically Detected») y construyó con él, así que la imagen está
+servida sin configurar nada.
+
+**Los dos `*.toml` del repo no se están usando, y no hay que contar con ellos.** En el servicio de este
+proyecto la página de Settings no tiene ningún archivo de configuración enlazado (el botón dice «Add File
+Path») y el propio panel avisa de que *Config as Code* está obsoleto: los archivos que ya lo usaban siguen
+valiendo hasta el 2026-12-01, pero un servicio que nunca lo usó no puede activarlo desde el 2026-08-28.
+Se cae por tanto la regla que se había anotado aquí («la configuración definida en código gana siempre»):
+**en este despliegue la fuente de verdad es el panel**, y `railway.toml` y `railway.cron.toml` quedan como
+referencia escrita de lo que debe ir en cada pantalla, no como lo que el host lee.
 
 **2. La base de datos.** New → PostgreSQL. **No hay que tocar la variable**: Railway inyecta en el
 servicio un `DATABASE_URL` de su forma, y `normalizar_url_database` lo traduce (arriba, «La base de datos
@@ -649,20 +656,26 @@ HTML disfrazado— y en el log no aparece ningún `aviso de despliegue`. Despué
 `/auth/registro`, pegar el enlace en el móvil, pasar una cita de prueba y borrarla desde el panel. En
 producción no hay datos sembrados: la cuenta de prueba de esta máquina no viaja.
 
-**5. El servicio del cron.** Another service → Deploy from GitHub repo → el mismo repo, otra vez. En su
-página de Settings se le pone como archivo de configuración **`railway.cron.toml`** (Railway permite
-elegir el archivo por servicio; es lo que permite que los dos vivan en el mismo repositorio con órdenes
-de arranque distintas). Sus variables:
+**5. El servicio del cron.** Another service → Deploy from GitHub repo → el mismo repo, otra vez. Como
+*Config as Code* no entra en juego (paso 1), el orden de arranque y el horario se escriben en su Settings,
+no en `railway.cron.toml`. Sus variables:
 
 ```
 API_URL=https://<dominio del servicio web>
 CRON_SECRET           el mismo valor, otra vez
 ```
 
-El horario viene de `cronSchedule = "*/15 * * * *"` en ese archivo. Si el panel no lo refleja, se escribe
-en Settings → Cron Schedule: el límite del host es que dos ejecuciones estén separadas **al menos 5
-minutos en UTC**, así que un cuarto de hora cabe holgado. No lleva `healthcheckPath`: el trabajo termina
-y el proceso se va, que es justo lo que pide el cron de Railway.
+El horario se escribe en Settings → Cron Schedule: `*/15 * * * *`. El límite del host es que dos
+ejecuciones estén separadas **al menos 5 minutos en UTC**, así que un cuarto de hora cabe holgado. No lleva
+`healthcheckPath`: el trabajo termina y el proceso se va, que es justo lo que pide el cron de Railway.
+
+Así quedó montado en el host: el servicio nuevo venía con Railpack y se le eligió **Dockerfile**, para que
+construya con este `Dockerfile` de dos etapas; en Settings lleva `python scripts/cron.py recordatorios`
+como orden de arranque y el preset *Every 15 minutes*. `API_URL` es la URL que el propio host le generó al
+servicio web, y no necesita dominio propio: habla con la API como lo haría cualquier cliente. Para
+`CRON_SECRET` no hubo que copiar el valor: en Variables se declaró como **Reference**
+`${{agenda-solo-miniapp.CRON_SECRET}}`, y Railway lo resuelve leyendo la variable del otro servicio —con
+eso el secreto no sale de la cuenta ni pasa por un portapapeles—.
 
 **6. Comprobar el primer tick** (log del servicio `cron-avisos`). Cada línea dice el estado y los
 contadores que devuelve la ruta interna, nunca datos de un paciente:
@@ -673,23 +686,68 @@ contadores que devuelve la ruta interna, nunca datos de un paciente:
 - `recordatorios 503` → el `CRON_SECRET` del servicio web está vacío y las rutas internas están apagadas.
 - `fallo: no se pudo llamar a https://…` → `API_URL` mal escrito, o la agenda aún no había levantado.
 
+Sobre la **Restart Policy** del servicio del cron: con un horario puesto, el propio panel de Settings lo
+dice —*Services with a cron schedule do not have a restart policy*—, así que no hay que cambiarla a
+`None` a mano; el proceso que termina bien no vuelve a arrancar.
+
 **7. Lo que queda apagado a propósito: la limpieza.** La decisión del primer despliegue es lanzar solo
 los avisos; la ruta que borra el histórico viejo se deja fuera hasta ver las cuentas. Cuando toque, un
-tercer servicio igual que `cron-avisos` pero con
+tercer servicio igual que `cron-avisos` (mismo repo, mismo Dockerfile) pero con este orden de arranque en
+su Settings y un horario diario:
 
 ```
-startCommand = "python scripts/cron.py limpieza --simular"
+python scripts/cron.py limpieza --simular
 ```
 
-y un horario diario. La primera semana se lee el `--simular` (deshace la transacción: enseña cuántas
-filas cerradas tiene cada consultorio fuera de su plazo); cuando cuadre, se quita el flag.
+La primera semana se lee el `--simular` (deshace la transacción: enseña cuántas filas cerradas tiene cada
+consultorio fuera de su plazo); cuando cuadre, se quita el flag.
 
-**Lo que no puedo verificar desde esta máquina**, para que no cuente como probado: que Railway construya
-la imagen (es el primer despliegue real, y depende de sus servidores), el plan y el coste de los dos
-cron, y que un tick salga de verdad. Lo que sí está comprobado aquí: la traducción de la URL del host, el
-guion del cron contra una red falsa, el guardia de arranque, `arranque.sh` levantando API e interfaz, y
-que `railway.toml` y `railway.cron.toml` parsean y usan claves y valores que existen en el esquema
-oficial de Railway (`https://railway.com/railway.schema.json`).
+**Cómo salió el primer despliegue real** (2026-10-20, cuenta del fundador, proyecto con los dos servicios
+y su PostgreSQL en EU West 1). Los dos contenedores se construyeron con este `Dockerfile` en los
+servidores del host, así que eso deja de ser una incógnita: en el log del arranque se leyó
+`Context impl PostgresqlImpl` y `Will assume transactional DDL` —la migración contra la base que inyecta
+Railway, o sea que `normalizar_url_database` funcionó con la URL real—, después `Application startup
+complete` y `Uvicorn running on http://0.0.0.0:8080`. El **healthcheck** también: con
+`healthcheckPath = /healthz`, la propia sonda del host aparece en el log como
+`100.64.0.1… "GET /healthz" 200 OK` en cuanto levanta, y desde fuera `/healthz` devuelve
+`{"estado":"ok"}`, `/` y `/reservas` dan 200. Las otras dos comprobaciones del primer arranque también:
+`/panel` devuelve HTML y `/api/v1/services` da **401** en JSON, no 200 con el HTML disfrazado. La ruta
+interna sigue cerrada desde fuera: un `POST /api/v1/internal/recordatorios` sin cabecera de secreto
+responde **401** (503 sería el caso de `CRON_SECRET` vacío en el servicio web, y aquí no lo está).
+
+Un detalle del healthcheck que el despliegue dejó en evidencia: el `HEALTHCHECK` del `Dockerfile` llevaba
+el 8000 fijado a mano, y el host inyectó `PORT=8080`. No afectó a Railway, que sondea su
+`healthcheckPath`, pero en `docker compose` habría dado por roto un contenedor sano, y al revés: como la
+interfaz se sirve con *fallback*, cualquier ruta desconocida contesta 200 con el HTML de la SPA, así que
+mirar solo el estado no demuestra que la API esté viva. Por eso el sondeo de la imagen es
+`scripts/salud.py` (11 pruebas en `test_sondeo_salud.py`): respeta `PORT` igual que `arranque.sh` y pide
+el cuerpo que `/healthz` promete.
+
+El **guardia de arranque saltó de verdad**, que es la prueba que le faltaba: cinco despliegues entre las
+01:26 y las 01:55 murieron en el intento, y en el log de uno de ellos se leía el motivo exacto —
+`RuntimeError: El despliegue no arranca: - JWT_SECRET tiene 16 caracteres y hacen falta 32 o más`—, o sea
+que el proceso prefirió no abrir el puerto antes que servir un sitio público con sesiones falsificables.
+Con el `token_urlsafe(32)` puesto, el servicio está activo desde entonces y en el log no aparece ningún
+`aviso de despliegue`.
+
+El **cron** dio tres pasadas (una lanzada a mano con *Run now* y dos automáticas del horario): cada una
+arranca el contenedor, imprime una línea y termina, sin reiniciarse. La línea fue
+`recordatorios 200: {"candidatas": 1, "planificados": 0, "enviados": 0, "enviados_1h": 0,
+"enviados_24h": 0, "omitidos": 0, "agotados": 0, "errores": 0, "sin_correo": 0, "husos_invalidos": 0,
+"proveedor": "simulado"}`. Un 200 con contadores es lo que tenía que dar: la Reference del secreto se
+resolvió (con 401 o 503 se habría notado), `API_URL` apunta al servicio web, y la pasada leyó la agenda
+real. `candidatas: 1` con `planificados: 0` no es un fallo: la única cita confirmada estaba fuera de las
+dos ventanas de adelanto (24 h pide entre 12 y 24 h de margen, 1 h pide entre 40 y 60 minutos) o dentro
+de la franja de silencio del huso del doctor; en ambos casos el dominio decide callar y el siguiente tick
+vuelve a intentarlo.
+
+**Lo que sigue sin probar**, para que tampoco cuente: que un correo llegue a un paciente de verdad
+(mientras `RECORDATORIOS_PROVEEDOR=simulado` el aviso se registra en la base y no sale), el SMTP real del
+doctor, un dominio propio en lugar del `*.up.railway.app`, la ruta de limpieza —que sigue apagada a
+propósito— y el coste del plan con los dos servicios. Falta además la prueba que solo se puede hacer con
+la agenda por delante: ver en el log del cron una pasada con `enviados_24h: 1`, es decir, que a una cita
+real le llegue su aviso cuando entre en la ventana de 24 h. No hay que escribir nada para verla: basta con
+que exista una cita a menos de un día y esperar al tick.
 
 ## Siguiente paso
 
@@ -697,11 +755,13 @@ El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin 
 hora real cuando la hay, y el paciente recibe el aviso de su cita sin que nadie lo escriba. Lo que
 falta:
 
-- **Antes de publicar**: el host está decidido (Railway) y los pasos están escritos arriba, «Railway: los
-  clics, los dos servicios y las variables». Lo que sigue en mano del fundador es ejecutarlos con su
-  cuenta —ahí se verá por primera vez si la imagen construye en los servidores de Railway, que esta
-  máquina no puede comprobar— y el SMTP real del doctor, que es lo único que hace que salga un correo de
-  verdad. La limpieza por cron sigue apagada a propósito hasta leer la primera pasada en `--simular`.
+- **Publicado está**: el host (Railway), la imagen construida por el host, la base del host migrada, el
+  healthcheck y el cron de avisos cada quince minutos, todo ello visto en los logs de arriba. En esa base
+  ya hay al menos una consulta con una cita confirmada, que es la que el cron cuenta como `candidatas: 1`.
+  Lo que sigue en mano del fundador es el **SMTP real del doctor**, que es lo único que hace que salga un
+  correo de verdad: con `RECORDATORIOS_PROVEEDOR=smtp`, `SMTP_HOST`, `SMTP_DE`, `SMTP_USUARIO`,
+  `SMTP_CONTRASENA` y `SMTP_SSL` si procede, el despacho deja de ser simulado. La limpieza por cron sigue
+  apagada a propósito hasta leer la primera pasada en `--simular`.
 - Panel: la mini-ficha de cada cita ya dice cuándo se recordó (y el export lo lleva por escrito). Lo
   que falta es la vista de conjunto: una columna con el estado de los avisos de toda la semana, para
   responder a "no me avisasteis" sin ir cita por cita.

@@ -35,7 +35,11 @@ COPY scripts/ ./scripts/
 EXPOSE 8000
 
 # Healthcheck sin curl: en la imagen slim no está instalado y bajarlo sería un segundo sistema.
+# Sondea `scripts/salud.py`, que lee `PORT` en vez de llevar el 8000 fijado, porque el host lo cambia: en
+# el despliegue real de Railway la app escuchó en 8080 (así lo inyectó el host, se ve en su log) y un 8000
+# a mano declararía «no saludable» a un contenedor sano. Con `healthcheckPath` en el host (Railway lo
+# tiene) esta línea no se mira: trabaja solo en `docker compose`, donde PORT no existe y el defecto es 8000.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=3 \
-    CMD python -c "import urllib.request as u,sys;sys.exit(0 if u.urlopen('http://127.0.0.1:8000/healthz').status==200 else 1)"
+    CMD ["python", "/app/scripts/salud.py"]
 
 CMD ["sh", "/app/scripts/arranque.sh"]
