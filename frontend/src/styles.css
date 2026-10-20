@@ -1,29 +1,63 @@
-/* Design tokens y base mobile-first. Modo claro/oscuro automático:
-   el doctor puede estar en un gabinete con poca luz. */
+/* Design tokens y base mobile-first de Agenda Solo.
+ *
+ * Dirección: "clínica de mañana". La paleta sale del propio oficio, no de un azul genérico:
+ * esmalte frío para el fondo, teal profiláctico (el de la pasta de flúor y los uniformes) para
+ * todo lo que se puede pulsar, y menta para el verde de "guardado/abierto". El rojo se queda
+ * como peligro porque un borrado tiene que parecer un borrado.
+ *
+ * Modo claro/oscuro automático: el doctor puede estar en un gabinete con poca luz.
+ * Cero tipografías descargadas y cero librerías de iconos: la app no pide nada a un tercero
+ * (ver la declaración de terceros del README).
+ */
 :root {
 	color-scheme: light dark;
 
-	--bg: #f7f8fa;
+	/* Esmalte: blanco con un cast verde muy frío, como una pared de consulta bien iluminada. */
+	--bg: #eef4f1;
 	--superficie: #ffffff;
-	--borde: #e2e5ea;
-	--texto: #14181f;
-	--texto-suave: #5b6472;
-	--primario: #2563eb;
-	--primario-texto: #ffffff;
-	--peligro: #dc2626;
-	--radio: 12px;
+	--superficie-baja: #f4f9f7;
+	--borde: #d5e3dd;
+	--borde-fuerte: #b7cdc6;
+	--texto: #0f211d;
+	--texto-suave: #4e6b64;
+	--primario: #0d6b60;
+	--primario-texto: #f4fffb;
+	--primario-suave: #dbeee8;
+	--brillo: #7cd0c4; /* el reflejo del esmalte: se usa solo en hilos y destellos */
+	--exito: #16805a;
+	--peligro: #b03225;
+	--aviso: #975a12;
+	--radio: 14px;
 	--tap: 44px; /* target táctil mínimo */
-	--sombra: 0 1px 3px rgb(20 24 31 / 8%);
+	--sombra: 0 1px 2px rgb(15 33 29 / 6%), 0 10px 26px -16px rgb(15 33 29 / 18%);
+
+	/* Tipografía: la nombre del médico va en serif (la placa de la consulta) y todo lo demás en
+	   la grotesca del sistema, que es la que se lee rápido en un móvil. */
+	--display: ui-serif, 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+	--cuerpo:
+		system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+	/* Movimiento: corto y con rebote suave hacia abajo, para que un toque se note sin sobrar. */
+	--dur: 150ms;
+	--curva: cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
 @media (prefers-color-scheme: dark) {
 	:root {
-		--bg: #0e1116;
-		--superficie: #171b22;
-		--borde: #262c36;
-		--texto: #e8ebef;
-		--texto-suave: #97a0ad;
-		--primario: #3b82f6;
+		--bg: #061210;
+		--superficie: #0e1a18;
+		--superficie-baja: #12211e;
+		--borde: #21332f;
+		--borde-fuerte: #2f4640;
+		--texto: #e2efea;
+		--texto-suave: #8da9a1;
+		--primario: #4bc2ad;
+		--primario-texto: #04211c;
+		--primario-suave: #16302b;
+		--brillo: #6fdcc7;
+		--exito: #46bd8f;
+		--peligro: #ef7f73;
+		--aviso: #d9a451;
 		--sombra: none;
 	}
 }
@@ -36,17 +70,24 @@ html,
 body {
 	margin: 0;
 	padding: 0;
-	background: var(--bg);
 	color: var(--texto);
-	font-family:
-		system-ui,
-		-apple-system,
-		'Segoe UI',
-		Roboto,
-		sans-serif;
+	font-family: var(--cuerpo);
 	font-size: 16px;
 	line-height: 1.5;
 	-webkit-text-size-adjust: 100%;
+}
+
+/* La luz de la mañana: un baño frío arriba, el color plano debajo. Es el único adorno de fondo
+   de toda la app; las tarjetas se apoyan encima sin necesidad de más textura. */
+body {
+	background:
+		radial-gradient(
+			1100px 520px at 50% -260px,
+			color-mix(in srgb, var(--primario) 14%, transparent),
+			transparent 70%
+		)
+		var(--bg);
+	background-attachment: fixed;
 }
 
 h1,
@@ -55,13 +96,18 @@ h3 {
 	margin: 0 0 0.5rem;
 	line-height: 1.25;
 	font-weight: 650;
+	letter-spacing: -0.012em;
 }
 
 h1 {
-	font-size: 1.6rem;
+	font-size: 1.7rem;
+	font-family: var(--display);
+	font-weight: 600;
+	letter-spacing: -0.02em;
 }
+
 h2 {
-	font-size: 1.15rem;
+	font-size: 1.1rem;
 }
 
 p {
@@ -73,6 +119,35 @@ a {
 	text-decoration: none;
 }
 
+/* Un encabezado de sección siempre lleva su icono delante: el ojo del doctor recorre el panel
+   por las siluetas, no por las palabras. */
+h2 {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+}
+
+h2 > svg {
+	flex: none;
+	color: var(--primario);
+}
+
+/* Utilidades de icono. Van aquí y no en el `<style>` de cada componente: el SVG lo renderiza
+   Icon.svelte por dentro, y el CSS con hash de Svelte no alcanza a un hijo que llega por
+   `{@html}`. En global, el icono se viste igual desde cualquier pantalla. */
+.ico {
+	flex: none;
+}
+
+/* Icono en color de acción en lugar del color heredado: marcas, encabezados y estados sueltos. */
+.ico--accion {
+	color: var(--primario);
+}
+
+.ico--nota {
+	margin-top: 0.15rem;
+}
+
 .contenedor {
 	width: 100%;
 	max-width: 720px;
@@ -81,12 +156,30 @@ a {
 }
 
 .tarjeta {
+	position: relative;
 	background: var(--superficie);
 	border: 1px solid var(--borde);
 	border-radius: var(--radio);
 	padding: 1rem;
 	box-shadow: var(--sombra);
 	margin-bottom: 1rem;
+	overflow: hidden;
+}
+
+/* La firma: un hilo de brillo en el borde superior de cada tarjeta, como el reflejo sobre la
+   corona de un diente. Se lee como acabado, no como decoración suelta. */
+.tarjeta::before {
+	content: '';
+	position: absolute;
+	inset: 0 0 auto;
+	height: 2px;
+	background: linear-gradient(
+		90deg,
+		transparent,
+		color-mix(in srgb, var(--primario) 55%, transparent) 22%,
+		var(--brillo) 48%,
+		transparent 82%
+	);
 }
 
 .fila {
@@ -101,11 +194,17 @@ a {
 }
 
 .etiqueta {
-	display: block;
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
 	font-size: 0.86rem;
 	font-weight: 600;
 	color: var(--texto-suave);
 	margin-bottom: 0.25rem;
+}
+
+.etiqueta > svg {
+	flex: none;
 }
 
 .campo {
@@ -127,6 +226,43 @@ button {
 input,
 select {
 	width: 100%;
+	background: var(--superficie-baja);
+}
+
+input[type='checkbox'] {
+	width: auto;
+	accent-color: var(--primario);
+	min-height: 0;
+}
+
+input[type='range'] {
+	min-height: 0;
+	accent-color: var(--primario);
+	padding: 0;
+	border: none;
+	background: transparent;
+}
+
+/* Todo lo que se puede tocar cambia en 150 ms. Sin esto un clic "funciona pero no se ve", que
+   es justo lo que pasaba con Copiar, Hoy y las franjas. */
+input,
+select,
+button {
+	transition:
+		background-color var(--dur) var(--curva),
+		border-color var(--dur) var(--curva),
+		color var(--dur) var(--curva),
+		opacity var(--dur) var(--curva),
+		box-shadow var(--dur) var(--curva),
+		transform var(--dur) var(--curva);
+}
+
+/* Todo botón lleva su icono pegado a la palabra: sin esto el SVG se colaría en una línea aparte. */
+button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: 0.35rem;
 }
 
 input:focus-visible,
@@ -137,13 +273,29 @@ a:focus-visible {
 	outline-offset: 1px;
 }
 
+button {
+	cursor: pointer;
+}
+
+/* El pulgar hunde el botón 1 px y lo encoge un poco: la sensación física de que el toque entró,
+   aunque el guardado tarde. */
+button:active:not(:disabled),
+.hora:active:not(:disabled),
+.dia:active:not(:disabled) {
+	transform: translateY(1px) scale(0.975);
+}
+
 .boton {
 	background: var(--primario);
 	color: var(--primario-texto);
 	border-color: var(--primario);
 	font-weight: 600;
 	padding-inline: 1.1rem;
-	cursor: pointer;
+}
+
+.boton:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--primario) 88%, #000);
+	border-color: color-mix(in srgb, var(--primario) 88%, #000);
 }
 
 .boton:disabled {
@@ -154,8 +306,14 @@ a:focus-visible {
 .boton--suave {
 	background: transparent;
 	color: var(--texto);
-	border-color: var(--borde);
+	border-color: var(--borde-fuerte);
 	font-weight: 550;
+}
+
+.boton--suave:hover:not(:disabled) {
+	background: var(--primario-suave);
+	border-color: var(--primario);
+	color: var(--primario);
 }
 
 .boton--peligro {
@@ -164,10 +322,101 @@ a:focus-visible {
 	border-color: color-mix(in srgb, var(--peligro) 40%, var(--borde));
 }
 
+.boton--peligro:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--peligro) 10%, transparent);
+	border-color: var(--peligro);
+}
+
 .boton--chico {
 	min-height: 36px;
 	padding: 0.2rem 0.55rem;
 	font-size: 0.9rem;
+}
+
+/* Estado de confirmación: lo que acaba de pasar se queda pintado un instante. Color y texto a la
+   vez, nunca solo movimiento, para que se lea también con el movimiento apagado. */
+.ok,
+.boton.ok {
+	color: var(--exito);
+	border-color: color-mix(in srgb, var(--exito) 45%, var(--borde));
+	background: color-mix(in srgb, var(--exito) 10%, var(--superficie));
+}
+
+.pulso {
+	animation: pulso 620ms var(--curva);
+}
+
+/* El mismo destello en color de acción, para un toque que confirma navegación y no un guardado.
+   Va solo, sin `.pulso`, para no acumular clases en el botón. */
+.pulso--primario {
+	--pulso: var(--primario);
+	animation: pulso 620ms var(--curva);
+}
+
+@keyframes pulso {
+	from {
+		box-shadow: 0 0 0 0 color-mix(in srgb, var(--pulso, var(--exito)) 55%, transparent);
+	}
+	to {
+		box-shadow: 0 0 0 14px transparent;
+	}
+}
+
+/* Lo que entra nuevo en una lista: nace desde la fila de arriba, no aparece de golpe. */
+.nace {
+	animation: nace 260ms var(--curva);
+}
+
+@keyframes nace {
+	from {
+		opacity: 0;
+		transform: translateY(-8px);
+		background: var(--primario-suave);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+/* El fondo de una fila que acaba de cambiar de estado: se apaga y se reenciende despacio. */
+.cambia {
+	animation: cambia 420ms var(--curva);
+}
+
+@keyframes cambia {
+	0% {
+		background: var(--primario-suave);
+	}
+	100% {
+		background: transparent;
+	}
+}
+
+.giro {
+	animation: giro 900ms linear infinite;
+}
+
+@keyframes giro {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* La marca de diente de la página pública se dibuja sola al entrar: es el saludo de la consulta.
+   Solo con movimiento permitido; sin él, el trazo aparece completo. */
+@media (prefers-reduced-motion: no-preference) {
+	.marca-diente > svg > path {
+		stroke-dasharray: 460;
+		stroke-dashoffset: 460;
+		animation: trazo 1.5s var(--curva) 0.15s forwards;
+	}
+
+	@keyframes trazo {
+		to {
+			stroke-dashoffset: 0;
+		}
+	}
 }
 
 .ajuste {
@@ -179,14 +428,31 @@ a:focus-visible {
 }
 
 .error {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.4rem;
 	color: var(--peligro);
 	font-size: 0.92rem;
 	margin-top: 0.5rem;
 }
 
+.error > svg {
+	flex: none;
+	margin-top: 0.15rem;
+}
+
 .aviso {
 	font-size: 0.86rem;
 	color: var(--texto-suave);
+}
+
+/* La línea de estado buena ("Guardado", "Cita guardada"): verde y con su check, en el panel y en
+   la página del paciente. Se comunica con color Y con icono y palabra, nunca solo con movimiento. */
+.hecha {
+	display: flex;
+	align-items: center;
+	gap: 0.3rem;
+	color: var(--exito);
 }
 
 .punto {
@@ -198,5 +464,54 @@ a:focus-visible {
 }
 
 .punto--vivo {
-	background: #16a34a;
+	background: var(--exito);
+}
+
+/* Los pasos reales de una reserva (servicio → hora → datos): la numeración cuenta información
+   que el paciente necesita, no es adorno. Por eso puede llevar líneas y números. */
+.pasos {
+	display: flex;
+	gap: 0.5rem;
+	list-style: none;
+	margin: 0 0 1rem;
+	padding: 0;
+	font-size: 0.8rem;
+	color: var(--texto-suave);
+}
+
+.pasos li {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	flex: 1;
+	padding-top: 0.45rem;
+	border-top: 2px solid var(--borde);
+}
+
+.pasos li.hecho {
+	border-top-color: color-mix(in srgb, var(--primario) 45%, var(--borde));
+}
+
+.pasos li.activo {
+	border-top-color: var(--primario);
+	color: var(--primario);
+	font-weight: 600;
+}
+
+/* Con el movimiento reducido el estado sigue contándose: se apaga la animación, no la señal. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.001ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.001ms !important;
+		scroll-behavior: auto !important;
+	}
+
+	button:active:not(:disabled),
+	.hora:active:not(:disabled),
+	.dia:active:not(:disabled) {
+		transform: none;
+	}
 }

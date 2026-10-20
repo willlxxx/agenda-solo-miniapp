@@ -8,12 +8,15 @@ import type {
 	Doctor,
 	EntradaLista,
 	EstadoCita,
+	FichaPaciente,
 	FichaPublica,
 	Franja,
 	ListaDeEsperaPublica,
 	ListaEspera,
 	ReservaAsistida,
-	Servicio
+	Retencion,
+	Servicio,
+	Supresion
 } from '#lib/types';
 
 const BASE = '/api/v1';
@@ -105,5 +108,21 @@ export const api = {
 	encajes: (dias = 21) => request<AvisosHueco>(`/waitlist/encajes?dias=${dias}`),
 	// El hueco se revalida en el servidor con el mismo motor: si ya no está libre, devuelve 409.
 	reservarPorEl: (id: string, datos: { fecha: string; hora: string }) =>
-		request<ReservaAsistida>(`/waitlist/${id}/reservar`, json(datos))
+		request<ReservaAsistida>(`/waitlist/${id}/reservar`, json(datos)),
+
+	// Ficha del paciente: la abre el médico desde una cita. El email y el histórico no viajan en la
+	// lista de la agenda, así que solo se piden cuando hay una pantalla delante que los justifica.
+	fichaDeCita: (citaId: string) => request<FichaPaciente>(`/pacientes/de-cita/${citaId}`),
+	suprimirPaciente: (id: string) => request<Supresion>(`/pacientes/${id}`, { method: 'DELETE' }),
+	/**
+	 * Enlace de la descarga, no una llamada: el navegador guarda el archivo con el nombre que decide
+	 * el servidor (`Content-Disposition`) sin pasar por JSON ni por un botón propio.
+	 */
+	url_de_datos: (id: string) => `${BASE}/pacientes/${id}/datos`,
+
+	// Retención: el médico elige el plazo, pero quién borra es el cron. Cambiar el número no elimina
+	// nada en el momento, así que esta pantalla puede ser tranquila.
+	retencion: () => request<Retencion>('/retencion'),
+	guardarRetencion: (meses: number) =>
+		request<Retencion>('/retencion', { method: 'PUT', body: JSON.stringify({ meses }) })
 };

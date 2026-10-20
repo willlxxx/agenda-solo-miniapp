@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '#lib/Icon.svelte';
 	import { api, ErrorApi } from '#lib/api';
 	import { panel } from '#lib/estado-panel.svelte';
 	import { PREFERENCIAS } from '#lib/types';
@@ -16,6 +17,21 @@
 	// Borrar no se confirma con un diálogo del navegador (se puede bloquear): el botón pide un
 	// segundo clic y el aviso se va solo al tocar cualquier otra fila.
 	let a_borrar = $state<string | null>(null);
+	// La fila que acaba de cambiar de estado se ilumina: sin eso, "Ya le avisé" movía la petición a
+	// otra pestaña y el médico no sabía si el clic había hecho algo.
+	let recién = $state<string | null>(null);
+	let saliendo = $state<string | null>(null);
+	let recién_temporizador: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => () => clearTimeout(recién_temporizador));
+
+	function marcar_recién(id: string) {
+		recién = id;
+		clearTimeout(recién_temporizador);
+		recién_temporizador = setTimeout(() => {
+			if (recién === id) recién = null;
+		}, 460);
+	}
 
 	const pendientes = $derived(todas.filter((e) => e.estado === 'en_espera'));
 	const contactadas = $derived(todas.filter((e) => e.estado === 'contactada'));
@@ -67,6 +83,7 @@
 		try {
 			const actualizada = await api.marcarLista(entrada.id, estado);
 			todas = todas.map((e) => (e.id === actualizada.id ? actualizada : e));
+			marcar_recién(actualizada.id);
 		} catch (error) {
 			mensaje = error instanceof ErrorApi ? error.message : 'No se pudo actualizar la petición';
 			// Si el PATCH falló, la fila que vemos ya no es fiable: volvemos a leer la lista.
@@ -83,6 +100,7 @@
 		}
 		ocupada = entrada.id;
 		a_borrar = null;
+		saliendo = entrada.id;
 		mensaje = null;
 		try {
 			await api.quitarLista(entrada.id);
@@ -93,6 +111,7 @@
 			mensaje = error instanceof ErrorApi ? error.message : 'No se pudo quitar la petición';
 			await cargar();
 		} finally {
+			saliendo = null;
 			ocupada = null;
 		}
 	}
@@ -100,7 +119,7 @@
 
 <section class="tarjeta">
 	<div class="fila fila--entre">
-		<h2>Lista de espera</h2>
+		<h2><Icon name="personas" tamaño={19} clase="ico ico--accion" />Lista de espera</h2>
 		{#if !cargando}
 			<div class="filtros">
 				<button class="filtro" class:activo={filtro === 'pendientes'} onclick={() => (filtro = 'pendientes')}>
@@ -130,12 +149,17 @@
 	</p>
 
 	{#each visibles as entrada (entrada.id)}
-		<article class="entrada" class:avisada={entrada.estado === 'contactada'}>
+		<article
+			class="entrada nace"
+			class:avisada={entrada.estado === 'contactada'}
+			class:cambia={recién === entrada.id}
+			class:sale={saliendo === entrada.id}
+		>
 			<span class="nombre">{entrada.nombre}</span>
 			{#if entrada.telefono}
-				<a class="enlace" href="tel:{entrada.telefono}">{entrada.telefono}</a>
+				<a class="enlace" href="tel:{entrada.telefono}"><Icon name="telefono" tamaño={14} clase="ico" />{entrada.telefono}</a>
 			{:else if entrada.email}
-				<a class="enlace" href="mailto:{entrada.email}">{entrada.email}</a>
+				<a class="enlace" href="mailto:{entrada.email}"><Icon name="correo" tamaño={14} clase="ico" />{entrada.email}</a>
 			{:else}
 				<span class="aviso">sin contacto</span>
 			{/if}
@@ -146,25 +170,26 @@
 
 			{#if entrada.estado === 'en_espera'}
 				<button class="boton--suave boton--chico" disabled={ocupada === entrada.id} onclick={() => marcar(entrada, 'contactada')}>
-					Ya le avisé
+					<Icon name="check" tamaño={15} />Ya le avisé
 				</button>
 			{:else}
 				<button class="boton--suave boton--chico" disabled={ocupada === entrada.id} onclick={() => marcar(entrada, 'en_espera')}>
-					Reabrir
+					<Icon name="recargar" tamaño={15} />Reabrir
 				</button>
 			{/if}
 			<button
 				class="boton--peligro boton--chico"
+				class:pide={a_borrar === entrada.id}
 				disabled={ocupada === entrada.id}
 				onclick={() => quitar(entrada)}
 			>
-				{a_borrar === entrada.id ? 'Confirmar' : 'Quitar'}
+				<Icon name="papelera" tamaño={15} />{a_borrar === entrada.id ? 'Confirmar' : 'Quitar'}
 			</button>
 		</article>
 	{/each}
 
 	{#if mensaje}
-		<p class="error" role="alert">{mensaje}</p>
+		<p class="error" role="alert"><Icon name="alerta" tamaño={15} />{mensaje}</p>
 	{/if}
 </section>
 
@@ -176,7 +201,10 @@
 	}
 
 	.filtro {
-		min-height: var(--tap);
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		min-height: 40px;
 		padding: 0.3rem 0.7rem;
 		border: 1px solid var(--borde);
 		border-radius: 999px;
@@ -186,10 +214,26 @@
 		cursor: pointer;
 	}
 
+	/* El filtro elegido se señala con dos cosas, no solo con el relleno: con el color a ciegas o
+	   en una pantalla mala las tres vistas se parecerían demasiado. */
+	.filtro::before {
+		content: '';
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: currentColor;
+		opacity: 0.35;
+	}
+
 	.filtro.activo {
 		background: var(--primario);
 		border-color: var(--primario);
-		color: #fff;
+		color: var(--primario-texto);
+		font-weight: 600;
+	}
+
+	.filtro.activo::before {
+		opacity: 1;
 	}
 
 	.entrada {
@@ -205,6 +249,19 @@
 		opacity: 0.6;
 	}
 
+	/* La petición que ya está de salida: se apaga mientras el servidor la borra. */
+	.entrada.sale {
+		opacity: 0.18;
+	}
+
+	/* Segundo clic para borrar: el botón se pone sólido para que "Confirmar" no se parezca a
+	   "Quitar", que es lo que acabas de pulsar sin querer. */
+	.boton--peligro.pide {
+		background: var(--peligro);
+		color: var(--superficie);
+		border-color: var(--peligro);
+	}
+
 	.nombre {
 		font-weight: 600;
 	}
@@ -214,7 +271,11 @@
 	}
 
 	.enlace {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
 		color: var(--primario);
 		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 </style>

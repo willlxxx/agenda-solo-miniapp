@@ -1,9 +1,15 @@
 <!doctype html>
-<html lang="en">
+<!-- La app está escrita en español: el `lang` manda la pronunciación al lector de pantalla y la
+     segmentación al navegador. Estaba en "en" por el esqueleto de SvelteKit. -->
+<html lang="es">
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<link rel="icon" href="/favicon.svg" />
+		<!-- El tinte de la barra del navegador en el móvil: esmalte claro y noche de consultorio. -->
+		<meta name="theme-color" content="#eef4f1" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#061210" media="(prefers-color-scheme: dark)" />
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

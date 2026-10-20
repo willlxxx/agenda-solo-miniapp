@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '#lib/Icon.svelte';
 	import { sesion } from '#lib/sesion.svelte';
 
 	let children = $props();
@@ -11,10 +12,12 @@
 
 <header class="barra">
 	<div class="contenedor fila fila--entre">
-		<strong>Agenda Solo</strong>
+		<strong class="marca"><Icon name="diente" tamaño={19} clase="ico ico--accion" /> Agenda Solo</strong>
 		<div class="fila">
 			<span class="aviso">{sesion.doctor?.nombre}</span>
-			<button class="boton--suave boton--chico" onclick={salir}>Salir</button>
+			<button class="boton--suave boton--chico" onclick={salir}>
+				<Icon name="salir" tamaño={15} /> Salir
+			</button>
 		</div>
 	</div>
 </header>
@@ -32,4 +35,15 @@
 		border-bottom: 1px solid var(--borde);
 		backdrop-filter: blur(6px);
 	}
+
+	/* La marca va en serif y con el diente delante: es el nombre de la consulta, no un menú. */
+	.marca {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		font-family: var(--display);
+		font-size: 1.05rem;
+		letter-spacing: -0.01em;
+	}
+
 </style>

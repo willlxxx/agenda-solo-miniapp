@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '#lib/Icon.svelte';
 	import { api, ErrorApi } from '#lib/api';
 	import { PREFERENCIAS } from '#lib/types';
 	import type {
@@ -91,6 +92,19 @@
 			? 'Ya habías pedido ese día y tu médico ya te avisó'
 			: 'Ya estabas en la lista de espera';
 	});
+
+	/**
+	 * Paso marcado en la guía de arriba. Es una secuencia real —servicio, día y hora, datos— así que
+	 * numerarla aporta información: el paciente sabe cuánto le queda sin tener que leer la pantalla.
+	 */
+	const paso_actual = $derived(
+		paso === 'hecho' ? 4 : paso === 'datos' ? 3 : paso === 'hora' ? 2 : 1
+	);
+
+	function clase_paso(n: number): string {
+		if (n === paso_actual) return 'activo';
+		return n < paso_actual ? 'hecho' : '';
+	}
 
 	function textoError(e: unknown): string {
 		return e instanceof ErrorApi ? e.message : 'No pudimos conectar con la agenda. Inténtalo de nuevo.';
@@ -232,29 +246,39 @@
 
 <main class="contenedor">
 	{#if data.error === 404 || !data.doctor}
-		<h1>Enlace no válido</h1>
+		<h1 class="roto"><Icon name="alerta" tamaño={20} />Enlace no válido</h1>
 		<p class="aviso">
 			Este enlace no corresponde a ninguna agenda. Pídele a tu médico que te vuelva a pasar su
 			enlace.
 		</p>
 	{:else}
-		<header>
+		<header class="placa">
+			<!-- La marca se dibuja sola al entrar (`.marca-diente`, en styles.css): es el saludo de la
+			 consulta y el único ornamento de la página. -->
+			<span class="marca-diente"><Icon name="diente" tamaño={44} /></span>
 			<h1>{data.doctor.nombre}</h1>
 			<p class="aviso">Reserva tu cita. Sin registro y sin llamadas.</p>
 		</header>
 
+		<ol class="pasos">
+			<li class={clase_paso(1)}><Icon name="diente" tamaño={15} clase="ico ico--accion" />Servicio</li>
+			<li class={clase_paso(2)}><Icon name="calendario" tamaño={15} />Día y hora</li>
+			<li class={clase_paso(3)}><Icon name="telefono" tamaño={15} clase="ico ico--accion" />Tus datos</li>
+		</ol>
+
 		{#if error && paso !== 'datos'}
-			<p class="error" role="alert">{error}</p>
+			<p class="error" role="alert"><Icon name="alerta" tamaño={15} clase="ico ico--accion ico--nota" />{error}</p>
 		{/if}
 
 		{#if paso === 'servicio'}
-			<h2>¿Qué necesitas?</h2>
+			<h2><Icon name="diente" tamaño={18} />¿Qué necesitas?</h2>
 			<div class="lista">
 				{#each data.servicios as s (s.id)}
 					<button class="tarjeta opcion" type="button" onclick={() => cargarHoras(s)}>
-						<span class="punto punto--vivo" style="background:{s.color}"></span>
+						<!-- El color del servicio manda en el diente: es el mismo que verá luego en la agenda. -->
+						<Icon name="diente" tamaño={22} estilo={`color: ${s.color}`} />
 						<span class="nombre">{s.nombre}</span>
-						<span class="aviso">{s.duracion_minutos} min</span>
+						<span class="aviso dura"><Icon name="reloj" tamaño={14} clase="ico ico--accion" />{s.duracion_minutos} min</span>
 					</button>
 				{:else}
 					<p class="aviso">Este médico aún no tiene servicios activos.</p>
@@ -262,12 +286,12 @@
 			</div>
 		{:else if paso === 'hora'}
 			<button class="boton boton--suave boton--chico" type="button" onclick={() => (paso = 'servicio')}>
-				← Otro servicio
+				<Icon name="izquierda" tamaño={15} />Otro servicio
 			</button>
-			<h2>{servicio?.nombre} · {servicio?.duracion_minutos} min</h2>
+			<h2><Icon name="diente" tamaño={18} />{servicio?.nombre} · {servicio?.duracion_minutos} min</h2>
 
 			{#if cargandoHoras}
-				<p class="aviso">Mirando la agenda…</p>
+				<p class="aviso fila"><Icon name="recargar" tamaño={15} clase="giro" />Mirando la agenda…</p>
 			{:else if dias.length}
 				<div class="dias" role="tablist" aria-label="Días con huecos">
 					{#each dias as d (d.fecha)}
@@ -284,7 +308,7 @@
 						</button>
 					{/each}
 				</div>
-				<p class="aviso">{nombreDia(fecha ?? '')}</p>
+				<p class="aviso dia-elegido"><Icon name="calendario" tamaño={14} clase="ico ico--accion" />{nombreDia(fecha ?? '')}</p>
 
 				<div class="rejilla">
 					{#each huecosDelDia as h (h.inicio)}
@@ -294,18 +318,20 @@
 					{/each}
 				</div>
 			{:else if horizonte}
-				<p class="aviso">
-					No queda ningún hueco de {servicio?.nombre.toLowerCase()} entre el {diaCorto(horizonte.desde)} y el
-					{diaCorto(horizonte.hasta)}.
+				<p class="aviso fila">
+					<Icon name="reloj" tamaño={15} clase="ico ico--accion" />No queda ningún hueco de {servicio?.nombre.toLowerCase()} entre
+					el {diaCorto(horizonte.desde)} y el {diaCorto(horizonte.hasta)}.
 				</p>
 			{:else}
-				<p class="aviso">Este médico no tiene horas libres ahora mismo.</p>
+				<p class="aviso fila"><Icon name="reloj" tamaño={15} clase="ico ico--accion" />Este médico no tiene horas libres ahora mismo.</p>
 			{/if}
 
 			{#if !cargandoHoras}
 				{#if listaHecha}
-					<div class="tarjeta confirmada">
-						<p><strong>{tituloLista}</strong></p>
+					<div class="tarjeta confirmada nace">
+						<p class="hecha">
+							<Icon name="check" tamaño={17} /><strong>{tituloLista}</strong>
+						</p>
 						<p class="aviso">
 							{#if listaHecha.estado === 'contactada'}
 								Tu médico marcó esta petición como avisada. Si no le has encontrado, escríbele o
@@ -318,11 +344,11 @@
 							{/if}
 						</p>
 						<button class="boton boton--suave" type="button" onclick={empezarDeNuevo}>
-							Buscar otra cosa
+							<Icon name="diente" tamaño={16} />Buscar otra cosa
 						</button>
 					</div>
 				{:else if listaAbierta}
-					<h3 class="titulo-lista">Avísame cuando quede un hueco</h3>
+					<h3 class="titulo-lista"><Icon name="campana" tamaño={17} clase="ico ico--accion" />Avísame cuando quede un hueco</h3>
 					<p class="aviso">
 						Tu médico ve esta lista en su panel y te llama cuando libera una hora. No es una
 						reserva: todavía no tienes cita.
@@ -371,15 +397,20 @@
 						</label>
 
 						<button class="boton" type="submit" disabled={!puedeLista}>
-							{listaGuardando ? 'Apuntando…' : 'Apuntarme'}
+							{#if listaGuardando}
+								<Icon name="recargar" tamaño={16} clase="giro" />Apuntando…
+							{:else}
+								<Icon name="personas" tamaño={16} />Apuntarme
+							{/if}
 						</button>
 
 						{#if listaError}
-							<p class="error" role="alert">{listaError}</p>
+							<p class="error" role="alert"><Icon name="alerta" tamaño={15} clase="ico ico--accion ico--nota" />{listaError}</p>
 						{/if}
 					</form>
 				{:else}
 					<button class="boton boton--suave enlace-lista" type="button" onclick={() => (listaAbierta = true)}>
+						<Icon name="campana" tamaño={16} />
 						{dias.length
 							? '¿Ninguna hora te viene bien? Avísame cuando quede una'
 							: 'Apuntarme a la lista de espera'}
@@ -388,24 +419,26 @@
 			{/if}
 		{:else if paso === 'datos'}
 			<button class="boton boton--suave boton--chico" type="button" onclick={() => (paso = 'hora')}>
-				← Otra hora
+				<Icon name="izquierda" tamaño={15} />Otra hora
 			</button>
-			<h2>{nombreDia(fecha ?? '')}, {hueco ? horaLarga(hueco.inicio) : ''}</h2>
+			<h2>
+				<Icon name="calendario" tamaño={18} />{nombreDia(fecha ?? '')}, {hueco ? horaLarga(hueco.inicio) : ''}
+			</h2>
 			<p class="aviso">
 				{servicio?.nombre} · {servicio?.duracion_minutos} min con {data.doctor.nombre}
 			</p>
 
 			<form class="tarjeta" onsubmit={(e) => { e.preventDefault(); confirmar(); }}>
 				<div class="campo">
-					<label class="etiqueta" for="nombre">Nombre y apellidos</label>
+					<label class="etiqueta" for="nombre"><Icon name="personas" tamaño={14} />Nombre y apellidos</label>
 					<input id="nombre" bind:value={nombre} autocomplete="name" required />
 				</div>
 				<div class="campo">
-					<label class="etiqueta" for="telefono">Teléfono</label>
+					<label class="etiqueta" for="telefono"><Icon name="telefono" tamaño={14} />Teléfono</label>
 					<input id="telefono" type="tel" bind:value={telefono} autocomplete="tel" inputmode="tel" />
 				</div>
 				<div class="campo">
-					<label class="etiqueta" for="correo">Email (opcional)</label>
+					<label class="etiqueta" for="correo"><Icon name="correo" tamaño={14} />Email (opcional)</label>
 					<input id="correo" type="email" bind:value={correo} autocomplete="email" />
 				</div>
 
@@ -415,45 +448,84 @@
 						Acepto que {data.doctor.nombre} guarde mi nombre, teléfono y esta cita para
 						gestionar mi reserva, y que use el email que escriba solo para recordármela.
 						No guardamos nada de tu salud: solo el tipo de visita.
-						Puedes pedir que se borre escribiéndole.
+						Puedes pedirle escribiéndole el archivo con tus datos, o que los borre.
 					</span>
 				</label>
 
 				<button class="boton" type="submit" disabled={!puedeEnviar}>
-					{guardando ? 'Reservando…' : 'Confirmar reserva'}
+					{#if guardando}
+						<Icon name="recargar" tamaño={16} clase="giro" />Reservando…
+					{:else}
+						<Icon name="check" tamaño={16} />Confirmar reserva
+					{/if}
 				</button>
 
 				{#if error}
-					<p class="error" role="alert">{error}</p>
+					<p class="error" role="alert"><Icon name="alerta" tamaño={15} clase="ico ico--accion ico--nota" />{error}</p>
 				{/if}
 			</form>
 			{#if correo}
 				<!-- El recordatorio es por email y solo si lo dejó: prometer un aviso que no puede
 					llegar sería peor que no prometerlo. -->
-				<p class="aviso">
-					Te avisaremos a {correo} un día antes y otra vez una hora antes de la cita. Es
-					automático, y puedes pedir que deje de llegarte escribiendo a {data.doctor.nombre}.
+				<p class="aviso aviso-recordatorio">
+					<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Te avisaremos a {correo} un día antes y otra vez una hora
+					antes de la cita. Es automático, y puedes pedir que deje de llegarte escribiendo a
+					{data.doctor.nombre}.
 				</p>
 			{:else}
-				<p class="aviso">
-					Si nos dejas un email arriba, te avisamos un día antes y una hora antes de la cita.
+				<p class="aviso aviso-recordatorio">
+					<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Si nos dejas un email arriba, te avisamos un día antes y
+					una hora antes de la cita.
 				</p>
 			{/if}
 		{:else}
-			<h2>Cita reservada</h2>
-			<div class="tarjeta resumen">
-				<p><strong>{cita?.servicio}</strong></p>
+			<h2><Icon name="check" tamaño={18} />Cita reservada</h2>
+			<div class="tarjeta resumen nace">
+				<p class="hecha"><Icon name="diente" tamaño={17} /><strong>{cita?.servicio}</strong></p>
 				<p>{nombreDia(cita?.fecha ?? '')} a las {cita ? horaLarga(cita.hora) : ''}</p>
 				<p class="aviso">{cita?.duracion_minutos} min con {cita?.doctor}</p>
 			</div>
 			<button class="boton boton--suave" type="button" onclick={empezarDeNuevo}>
-				Reservar otra cosa
+				<Icon name="diente" tamaño={16} />Reservar otra cosa
 			</button>
 		{/if}
 	{/if}
 </main>
 
 <style>
+	/* La placa de la consulta: la marca dibujada, el nombre y la promesa, centrados. Es lo primero
+	   que ve quien llega desde un WhatsApp y no sabe qué le espera. */
+	.placa {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+		gap: 0.2rem;
+		margin: 0.5rem 0 1.25rem;
+	}
+
+	.placa h1 {
+		margin: 0;
+	}
+
+	/* Un enlace roto es un aviso, no un título de bienvenida: va en rojo y con su icono. */
+	.roto {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 1.3rem;
+		color: var(--peligro);
+	}
+
+	.marca-diente {
+		display: inline-flex;
+		padding: 0.5rem;
+		margin-bottom: 0.4rem;
+		border-radius: 50%;
+		color: var(--primario);
+		background: var(--primario-suave);
+	}
+
 	.lista {
 		display: flex;
 		flex-direction: column;
@@ -500,7 +572,8 @@
 	.dia.activo {
 		background: var(--primario);
 		border-color: var(--primario);
-		color: #fff;
+		color: var(--primario-texto);
+		box-shadow: 0 6px 14px -8px color-mix(in srgb, var(--primario) 70%, transparent);
 	}
 
 	.dow {
@@ -534,6 +607,26 @@
 
 	.hora:hover {
 		border-color: var(--primario);
+		background: var(--primario-suave);
+		color: var(--primario);
+	}
+
+	/* Los avisos con icono se alinean en dos columnas: la silueta a la izquierda y el texto al lado,
+	   para que "15 min" o "quedan huecos" se lean con el mismo barrido que el resto de la página.
+	   El icono lleva `clase="ico ico--accion"`: las utilidades están en styles.css, porque el CSS con
+	   hash de Svelte no llega al SVG que renderiza Icon.svelte por dentro. */
+	.dura,
+	.dia-elegido,
+	.aviso-recordatorio {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+
+	.aviso-recordatorio {
+		align-items: flex-start;
+		line-height: 1.4;
+		padding-left: 0.1rem;
 	}
 
 	.consentimiento {
@@ -556,6 +649,9 @@
 	}
 
 	.titulo-lista {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
 		margin: 1.5rem 0 0.25rem;
 		font-size: 1.05rem;
 	}

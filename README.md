@@ -59,7 +59,7 @@ npm run dev          # http://localhost:5173, con proxy /api -> :8000
 ## Pruebas
 
 ```bash
-cd backend && pytest -q          # 149 tests sobre PostgreSQL real (base agenda_test autogestionada)
+cd backend && pytest -q          # 276 pruebas sobre PostgreSQL real (base agenda_test autogestionada)
 cd frontend && npm run check     # svelte-check, 0 errores
 ```
 
@@ -76,8 +76,9 @@ servicio, y check + build del frontend.
 - **`duracion_minutos` se congela en la cita.** Editar un servicio no reescribe citas históricas.
 - **Datos de salud (GDPR).** El servicio reservado revela información de salud: consentimiento
   explícito en la reserva (`consentimiento_ok_en`), minimización de datos, y retención de 6–12
-  meses antes de borrar citas pasadas. Nunca almacenar diagnósticos, notas clínicas, radiografías
-  ni historial médico.
+  meses antes de borrar citas pasadas (la banda la fija `doctors.retencion_meses` y el barrido lo
+  hace `POST /api/v1/internal/limpieza`; ver la sección de retención). Nunca almacenar
+  diagnósticos, notas clínicas, radiografías ni historial médico.
 - **Los servicios no se borran físicamente**: se desactivan (`activo = false`), porque pueden tener
   citas futuras.
 
@@ -280,6 +281,182 @@ estándar dentro de un hilo). Se prueba en `tests/test_recordatorios.py`, con fe
 corra el CI a la hora que corra, la pasada de las 04:00 de la madrugada se sigue comprobando a las
 04:00.
 
+## Suprimir y exportar los datos de un paciente (Semana 2)
+
+La casilla de consentimiento promete que se puede borrar la ficha. Esta es esa ruta, y es la que
+cierra el círculo con el recordatorio: sin email guardado no hay aviso que mandar.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/v1/pacientes/de-cita/{cita_id}` | La ficha de quien está en esa fila de la agenda: nombre, teléfono, email, alta, última visita, sus citas y sus peticiones de la lista, y el texto de consecuencias con las cuentas reales. |
+| `GET /api/v1/pacientes/{paciente_id}/datos` | Artículo 15 y 20: un JSON que se descarga como adjunto con nombre legible (`datos-de-ana-ibars.json`), fechado con `generado_el`. |
+| `DELETE /api/v1/pacientes/{paciente_id}` | Artículo 17: borra la ficha y suelta la identidad de sus citas y de sus peticiones. Devuelve cuántas cosas quedaron sin nombre. |
+
+Los tres requieren sesión del médico y solo alcanzan a sus propios pacientes (404 si la cita o la
+ficha es de otro consultorio). La entrada es la cita, no un censo: la agenda no lleva el `patient_id`
+en su payload y sigue sin llevarlo.
+
+**Conservar la cita, soltar la identidad.** `DELETE` pone a `NULL` el `patient_id` de las citas y de
+las entradas de la lista de espera y entonces borra la fila de `patients`. Se va el nombre, el
+teléfono, el email y la última visita. Se queda la hora, la duración, el servicio, el estado, el
+`origen` y —lo importante— la constancia del consentimiento con su instante, que es la prueba de que
+esa reserva fue legítima. Borrar la cita entera destruiría el propio registro del consultorio,
+liberaría un hueco de un día que ya pasó y dejaría al médico sin forma de contestar a "yo sí avisé de
+la anulación". Un borrado de datos no es una cancelación.
+
+Detalles que hacen esto seguro:
+
+- **Segundo clic con cuentas.** El botón grande dice "Borrar su ficha" y abre el texto de
+  `app/domain/borrado.py` con los números de ESA ficha ("Quedan 3 citas sin nombre —1 sigue por
+  llegar—…"). El texto lo escribe el servidor, no el panel, para que no puedan divergir.
+- **El mismo candado que reserva.** La transacción toma `pg_advisory_xact_lock('agenda-cita:{doctor}')`,
+  la clave de las reservas: nadie puede apuntarse a un hueco con la identidad que se está suprimiendo
+  mientras dura el borrado.
+- **Primero `UPDATE`, después `DELETE`.** Las FK de `appointments` y `waitlist` hacia `patients` no
+  tienen `ondelete`, así que al revés PostgreSQL cortaría la operación en cuanto la ficha tuviera una
+  sola cita.
+- **La fila sigue ocupada.** En la agenda la cita pasa a leerse "paciente borrado" y su hueco no se
+  vuelve a ofrecer; la lista de espera muestra "Petición sin nombre". Si esa persona reserva otro día,
+  es una ficha nueva con su `id`.
+- **El export dice lo que no se guarda**: diagnósticos, notas clínicas ni historial nunca estuvieron
+  en la base, y el archivo lo declara en `no_se_guarda`.
+
+Lo que todavía no existe, para no prometerlo: no hay portal donde el paciente se descargue o se borre
+solo —lo hace el médico desde su panel y le pasa el archivo—. La retención de las citas pasadas ya está
+resuelta aparte, en la siguiente sección.
+
+Está en `app/domain/borrado.py` (qué se va, qué se queda y cómo se redacta, sin BD),
+`app/services/pacientes.py` (leer, exportar y suprimir en transacción) y
+`app/api/v1/pacientes.py`, con la mini-ficha en `frontend/src/lib/panel/Agenda.svelte`. Se prueba en
+`tests/test_pacientes.py`.
+
+## Retención: cuándo se borra una cita cerrada (Semana 2)
+
+El borrado por petición del paciente (arriba) es un caso. Este es el otro: el histórico que nadie pide
+borrar y que no conviene guardar para siempre. Es el art. 5.1.e (minimización) y, para el aviso de la
+página pública, el compromiso del plazo.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/v1/retencion` | El plazo del consultorio (6–12 meses) y la frase que explica qué hace. La frase la escribe el servidor: si la escribiera el panel, quedaría mintiendo en cuanto cambiemos la regla. |
+| `PUT /api/v1/retencion` | `{"meses": 8}`. Cambiar el número **no borra nada en el momento**; solo fija el umbral que usará la próxima pasada. |
+| `POST /api/v1/internal/limpieza` | La pasada del cron sobre todos los consultorios. Con `?simular=true` ejecuta los mismos `DELETE` y deshace la transacción: enseña las cuentas exactas sin perder una fila. Cabecera `x-cron-secret`, fuera de `/docs`, apagado (503) sin secreto. |
+
+Qué se va y qué se queda, dicho sin eufemismos:
+
+- **Solo citas cerradas**: `completada`, `no_vino` y `cancelada` con más del plazo. Una `confirmada`
+  cuyo día ya pasó no se toca: es un cabo suelto del registro, no dato viejo, y borrarla sería tapar
+  un hueco en lugar de limpiarlo. La pasada lo cuantifica en `confirmadas_sin_cerrar` para que el
+  médico vea cuántas lleva sin cerrar.
+- **La constancia del consentimiento se va con la fila.** Mientras la cita existe,
+  `consentimiento_ok_en` prueba que el procesamiento fue legítimo; cuando ya no hay cita que
+  justificar, conservar el recibo sería mantener un dato personal indefinidamente.
+- **Fichas huérfanas**: una ficha de `patients` solo se borra si, **después** de limpiar citas y
+  peticiones, no queda nada señalándola. El orden es citas → peticiones → fichas, dentro de la misma
+  transacción; al revés, una ficha cuyo último histórico se acaba de eliminar seguiría apareciendo
+  como "usada".
+- **Peticiones de la lista de espera** con el plazo cumplido, da igual su estado: una `en_espera` de
+  hace dos años no es demanda, es un teléfono guardado sin finalidad.
+- **Un plazo por consultorio**, dentro de 6–12 (`ck_doctor_retencion` en la BD y `normalizar_meses()`
+  en el dominio). El barrido respeta el de cada uno: la retención de García no puede llevarse el
+  histórico de Lopez.
+
+Detalles que hacen esto seguro:
+
+- **La regla decide en el dominio, el SQL solo recorta.** `app/domain/retencion.py` tiene los
+  predicados (`cita_eliminable`, `peticion_eliminable`, `ficha_eliminable`); el servicio trae
+  candidatos con un criterio ancho y borra **por lista de ids**. Si el `WHERE` volviera a escribir la
+  regla, un cambio en el dominio cambiaría los contadores pero no el borrado.
+- **Calendario, no 30 días.** `restar_meses` recorta al último día del mes destino: 31 de marzo menos
+  un mes es 28 de febrero, y el 29 de febrero de 2024 menos 12 meses es 28 de febrero de 2023. Sin ese
+  recorte, la pasada del día 31 se caería en los meses cortos.
+- **Candado por consultorio** (`pg_advisory_xact_lock('limpieza:{doctor}')`), clave propia: no
+  reserva huecos ni marca avisos, así que no tiene por qué esperar a nadie.
+- **El candado de la base manda.** Si entre la lectura y el `DELETE` alguien reserva sobre una ficha
+  que estábamos soltando, la FK sin `ondelete` corta con `IntegrityError`, la tanda entera se
+  deshace y cuenta como `conflictos`. Nunca se borra a medias la reserva de alguien que acaba de
+  llegar.
+- **Idempotente y sin datos personales.** La segunda pasada del mismo minuto ya no encuentra nada; el
+  payload son solo contadores (`citas_eliminadas`, `peticiones_eliminadas`, `fichas_eliminadas`,
+  `fichas_en_uso`, `confirmadas_sin_cerrar`, `conflictos`, `simulada`).
+
+```bash
+# Primero enseñar, luego borrar
+curl -sS -X POST "$AGENDA_URL/api/v1/internal/limpieza?simular=true" -H "x-cron-secret: $CRON_SECRET"
+curl -sS -X POST "$AGENDA_URL/api/v1/internal/limpieza"          -H "x-cron-secret: $CRON_SECRET"
+```
+
+Con una pasada al día basta: el plazo se mide en meses. Es la misma tarea programada que los
+recordatorios (otro `curl` en el cron de Railway o una GitHub Action), y **tampoco corre sola en
+producción hasta que ese cron esté montado** —en desarrollo se lanza a mano con las dos líneas de
+arriba—.
+
+Está en `app/domain/retencion.py` (plazo, banda y predicados, sin BD ni reloj de entorno),
+`app/services/limpieza.py` (leer, candar, borrar por ids y deshacer si es ensayo),
+`app/api/v1/retencion.py` (lo que ve el médico) y `app/api/v1/limpieza.py` (la ruta del cron), con el
+deslizador en `frontend/src/lib/panel/Retencion.svelte`. Se prueba en `tests/test_retencion.py`, con
+`ahora` fijado por dependencia: una retención de 12 meses se comprueba con fechas de 2025, no
+esperando a que el CI corra el día que toca.
+
+## La cara: estética de consulta y botones que responden (Semana 2)
+
+Hasta aquí el panel funcionaba pero no se veía como una herramienta de odontología, y había tres
+botones que hacían su trabajo en silencio: **"Copiar"** en el enlace de reserva, **"Hoy"** en la
+agenda y **"+ Franja"** en el horario. Los tres tienen ahora reacción visible, y tanto el panel como
+la página del paciente (`/d/<slug>`) llevan una identidad propia.
+
+Qué se eligió y por qué:
+
+- **Paleta de esmalte y menta clínica**, no la típica azul-sanitaria: fondo `#eef4f1` con un halo
+  radial verde en la cabecera, superficie blanca, primario `#0d6b60` y un brillo `#7cd0c4` que es la
+  única nota decorativa (la línea superior de cada tarjeta). En modo oscuro el fondo es
+  `#061210` y las sombras se apagan a `none`, porque una tarjeta con sombra sobre negro se ve
+  pegada, no flotando. Todo vive en variables de `frontend/src/styles.css`; ningún componente pone un
+  color literal.
+- **Cero dependencias nuevas.** Los iconos son SVG dibujados a mano en `frontend/src/lib/icons.ts` y
+  se pintan con `Icon.svelte` (24×24, `stroke="currentColor"`, `aria-hidden`); no hay librería de
+  iconos ni tipografías descargadas —el display es la pila del sistema (`ui-serif`/Georgia para los
+  títulos, el resto sans)—, y el único archivo nuevo es `frontend/static/favicon.svg`, propio. La
+  declaración de terceros de la página pública sigue siendo cierta sin tocarla.
+- **El diente es el hilo**, no un adorno suelto: la cabecera de la página pública lo dibuja con un
+  trazo animado (`stroke-dashoffset`, solo si el navegador no pide `prefers-reduced-motion`), cada
+  servicio lleva su diente con el color que el médico le asignó, y "Servicios" del panel repite el
+  gesto. La secuencia de reserva se lee como un raíl de tres pasos (`Servicio → Día y hora → Tus
+  datos`) que marca lo hecho en verde y lo presente en menta, para que el paciente sepa cuántos
+  pasos le quedan sin contar con que entienda el inglés de una barra de progreso.
+- **Ningún estado depende solo del color o del movimiento.** "Copiado" cambia de texto, de icono y de
+  color a la vez, y lo mismo dice una franja abierta/cerrada (además de la opacidad, la palabra). Los
+  botones que se quedaron solo icono conservan su `aria-label`, y el aviso de copiar va en un
+  `role="status" aria-live="polite"` para que un lector de pantalla lo lea.
+
+Cómo se siente cada uno de los tres botones que no respondían:
+
+- **Copiar** pasa a verde con el icono de check y "Copiado", y el texto de abajo lo confirma; si el
+  navegador bloquea el portapapeles (pasa sin HTTPS o sin el foco de la pestaña) el botón **no** finge
+  éxito: se queda como está y el aviso explica que se copie a mano con Ctrl+C. El verde se apaga solo
+  a los 2,6 s; el error no, porque un aviso de "no copió" que desaparece deja al médico con la duda.
+- **Hoy** destella (`pulso--primario`, un anillo que se expande y muere en 620 ms) y **vuelve a pedir
+  la semana aunque ya estés en ella**. Era el fallo de verdad: el botón solo reasignaba el lunes, y si
+  la semana no cambiaba, el efecto que carga las citas no llegaba a correr —pulsar "Hoy" un martes por
+  la tarde no refrescaba nada—.
+- **+ Franja** se queda "Añadiendo…" y bloqueado mientras se guarda, la fila nueva entra deslizándose
+  y luego destella; "Quitar" la apaga a media opacidad mientras la borra. Además el hueco que propone
+  ya no es una hora fija a las 10:00: se coloca **después de la última franja del día**, porque con la
+  mañana abierta (09:00–14:00) la propuesta fija empalmaba con ella y el botón devolvía un 409 de
+  solape que además **no se veía en ningún sitio**: el mensaje de error se dibujaba dentro de la
+  tarjeta de "Vacaciones y festivos", abajo del todo. Ahora hay dos avisos, uno por tarjeta.
+
+El resto del feedback es una línea de CSS: transición de 150 ms en los controles, `translateY(1px)
+scale(0.975)` al pulsar, y dos animaciones reutilizables (`nace` para lo que entra, `cambia` para lo
+que acaba de guardarse) que van **claveteadas por id**, así que una fila solo se anima cuando es nueva
+de verdad y no en cada refresco de la lista. Con `prefers-reduced-motion: reduce` todo ese movimiento
+se apaga dejando una duración casi nula: las palabras y los iconos siguen contando lo mismo.
+
+Está en `frontend/src/styles.css` (tokens, estados, animaciones), `frontend/src/lib/icons.ts` +
+`Icon.svelte` (el dibujo), y ya en cada sección: `panel/+page.svelte`, `Agenda.svelte`,
+`Horario.svelte`, `Avisos.svelte`, `ListaDeEspera.svelte`, `Servicios.svelte`, `Retencion.svelte` y
+`routes/d/[slug]/+page.svelte`.
+
 ## Siguiente paso
 
 El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco, le ofrece una
@@ -287,10 +464,15 @@ hora real cuando la hay, y el paciente recibe el aviso de su cita sin que nadie 
 falta:
 
 - **Antes de publicar**: generar un `JWT_SECRET` nuevo y un `CRON_SECRET` (los de `backend/.env` son
-  de desarrollo y ese archivo nunca se sube), montar el cron con `curl`, y poner el SMTP real del
-  doctor (`RECORDATORIOS_PROVEEDOR=smtp` + `SMTP_HOST`/`SMTP_DE`). Sin esas cuatro cosas la agenda
-  funciona y no envía nada.
-- Panel: ver el estado de los avisos de cada cita (cuándo se recordó) para poder responder a
-  "no me avisasteis" sin ir a la base de datos.
+  de desarrollo y ese archivo nunca se sube), montar el cron con los dos `curl` (recordatorios cada
+  15 min, limpieza una vez al día, `?simular=true` la primera vez para ver cuentas antes de borrar),
+  y poner el SMTP real del doctor (`RECORDATORIOS_PROVEEDOR=smtp` + `SMTP_HOST`/`SMTP_DE`). Sin esas
+  cosas la agenda funciona, no envía avisos y no borra su histórico viejo.
+- Panel: la mini-ficha de cada cita ya dice cuándo se recordó (y el export lo lleva por escrito). Lo
+  que falta es la vista de conjunto: una columna con el estado de los avisos de toda la semana, para
+  responder a "no me avisasteis" sin ir cita por cita.
+- El aviso de retención de la página pública todavía dice que se puede pedir el archivo o el borrado,
+  pero no cuantifica el plazo. En cuanto el cron de limpieza esté montado se puede añadir "y se borra
+  solo a los X meses"; hasta entonces sería prometer un automático que no corre.
 - Fase 2 del documento, todavía fuera: pagos, Google Calendar, integración con el software dental.
 

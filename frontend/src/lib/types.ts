@@ -194,3 +194,67 @@ export type ReservaAsistida = {
 	/** La fila de la lista, ya cerrada como `contactada`. */
 	entrada: EntradaLista;
 };
+
+/** Una cita tal y como la ve el dueño de la agenda, dentro de la ficha de su paciente. */
+export type CitaDeFicha = {
+	id: string;
+	inicio_utc: string;
+	fecha: string;
+	hora: string;
+	fin: string;
+	duracion_minutos: number;
+	estado: EstadoCita;
+	/** `publico`: la clicó el paciente; `panel`: la escribió el médico por él. */
+	origen: 'publico' | 'panel';
+	servicio: string | null;
+	consentimiento_en: string;
+	recordatorio_24h_en: string | null;
+	recordatorio_1h_en: string | null;
+	recordatorio_intentos: number;
+};
+
+export type PeticionDeFicha = {
+	id: string;
+	fecha: string | null;
+	preferencia: PreferenciaLista | null;
+	estado: string;
+	servicio: string | null;
+	pedido_utc: string;
+	avisado_utc: string | null;
+};
+
+/**
+ * Lo que hay guardado sobre una persona. Sale solo al abrir su ficha desde una cita —la lista de la
+ * agenda pinta nombre y teléfono, nada más— y es la base del export y del borrado (RGPD).
+ */
+export type FichaPaciente = {
+	id: string;
+	nombre: string;
+	telefono: string | null;
+	email: string | null;
+	ultima_visita: string | null;
+	creado_en: string;
+	timezone: string;
+	citas: CitaDeFicha[];
+	peticiones: PeticionDeFicha[];
+	/** Lo que el médico va a perder si borra: texto del servidor, con las cuentas de esta ficha. */
+	aviso: string;
+};
+
+export type Supresion = {
+	paciente: string;
+	citas_sin_identidad: number;
+	citas_por_llegar: number;
+	peticiones_sin_identidad: number;
+	aviso: string;
+};
+
+/**
+ * El plazo que el médico elige (6-12 meses) y la frase del servidor que explica qué hace. La frase
+ * viene del backend porque es la regla de borrado: si el panel la escribiera, quedaría obsoleta en
+ * cuanto cambiemos el criterio y seguiría prometiéndose en pantalla.
+ */
+export type Retencion = {
+	meses: number;
+	explicacion: string;
+};

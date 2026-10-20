@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '#lib/Icon.svelte';
 	import { api, ErrorApi } from '#lib/api';
 	import type { Servicio } from '#lib/types';
 
@@ -9,6 +10,20 @@
 	let mensaje = $state<string | null>(null);
 	let nuevoNombre = $state('');
 	let nuevaDuracion = $state(30);
+
+	// El autoguardado no tiene botón: la prueba de que llegó al servidor es esta luz en la fila.
+	let recién = $state<string | null>(null);
+	let recién_temporizador: ReturnType<typeof setTimeout> | undefined;
+
+	function avisar_guardado(id: string) {
+		recién = id;
+		clearTimeout(recién_temporizador);
+		recién_temporizador = setTimeout(() => {
+			if (recién === id) recién = null;
+		}, 460);
+	}
+
+	$effect(() => () => clearTimeout(recién_temporizador));
 
 	const temporizadores = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -26,6 +41,7 @@
 					servicios = servicios.map((s) => (s.id === actualizado.id ? actualizado : s));
 					estado = 'guardado';
 					mensaje = null;
+					avisar_guardado(actualizado.id);
 				} catch (error) {
 					estado = 'error';
 					mensaje = error instanceof ErrorApi ? error.message : 'No se pudo guardar';
@@ -64,6 +80,7 @@
 			await api.desactivarServicio(servicio.id);
 			servicios = servicios.map((s) => (s.id === servicio.id ? { ...s, activo: false } : s));
 			estado = 'guardado';
+			avisar_guardado(servicio.id);
 		} catch (error) {
 			estado = 'error';
 			mensaje = error instanceof ErrorApi ? error.message : 'No se pudo desactivar';
@@ -83,6 +100,7 @@
 			nuevoNombre = '';
 			nuevaDuracion = 30;
 			estado = 'guardado';
+			avisar_guardado(creado.id);
 		} catch (error) {
 			estado = 'error';
 			mensaje = error instanceof ErrorApi ? error.message : 'No se pudo crear el servicio';
@@ -94,7 +112,7 @@
 
 <section class="tarjeta">
 	<div class="fila fila--entre">
-		<h2>Servicios</h2>
+		<h2><Icon name="diente" tamaño={19} clase="ico ico--accion" />Servicios</h2>
 		<span class="aviso">{activos} activos</span>
 	</div>
 	<p class="aviso">
@@ -108,7 +126,12 @@
 	{/if}
 
 	{#each servicios as servicio (servicio.id)}
-		<article class="servicio" class:apagado={!servicio.activo}>
+		<!-- `nace`: la animación solo corre cuando el servicio entra en la lista, no en cada tecla. -->
+		<article
+			class="servicio nace"
+			class:apagado={!servicio.activo}
+			class:cambia={recién === servicio.id}
+		>
 			<span class="punto" style="background: {servicio.color}" aria-hidden="true"></span>
 
 			<input
@@ -120,11 +143,11 @@
 
 			<div class="ajuste">
 				<button class="boton--suave boton--chico" aria-label="Restar 5 minutos" onclick={() => ajustarDuracion(servicio, -5)}>
-					−5
+					<Icon name="menos" tamaño={14} />5
 				</button>
 				<span>{servicio.duracion_minutos} min</span>
 				<button class="boton--suave boton--chico" aria-label="Sumar 5 minutos" onclick={() => ajustarDuracion(servicio, 5)}>
-					+5
+					<Icon name="mas" tamaño={14} />5
 				</button>
 			</div>
 
@@ -137,7 +160,9 @@
 				<span class="aviso">{servicio.activo ? 'visible' : 'oculto'}</span>
 			</label>
 
-			<button class="boton--peligro boton--chico" onclick={() => desactivarDefinitivo(servicio)}>Ocultar</button>
+			<button class="boton--peligro boton--chico" onclick={() => desactivarDefinitivo(servicio)}>
+				<Icon name="papelera" tamaño={15} />Ocultar
+			</button>
 		</article>
 	{/each}
 
@@ -145,15 +170,15 @@
 		<input placeholder="Otro servicio (p. ej. Ortodoncia)" bind:value={nuevoNombre} aria-label="Nuevo servicio" />
 		<input class="duracion" type="number" min="5" max="240" step="5" bind:value={nuevaDuracion} aria-label="Duración en minutos" />
 		<span class="aviso">min</span>
-		<button class="boton--suave boton--chico" type="submit">Añadir</button>
+		<button class="boton--suave boton--chico" type="submit"><Icon name="mas" tamaño={15} />Añadir</button>
 	</form>
 
 	{#if mensaje}
-		<p class="error" role="alert">{mensaje}</p>
+		<p class="error" role="alert"><Icon name="alerta" tamaño={15} />{mensaje}</p>
 	{:else if estado === 'guardando'}
 		<p class="aviso">Guardando…</p>
 	{:else if estado === 'guardado'}
-		<p class="aviso fila"><span class="punto punto--vivo"></span> Guardado</p>
+		<p class="aviso hecha" role="status"><Icon name="check" tamaño={15} />Guardado</p>
 	{/if}
 </section>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '#lib/Icon.svelte';
 	import { api, ErrorApi } from '#lib/api';
 	import { panel } from '#lib/estado-panel.svelte';
 	import { PREFERENCIAS } from '#lib/types';
@@ -99,10 +100,11 @@
 
 <section class="tarjeta">
 	<div class="fila fila--entre">
-		<h2>Huecos para quien espera</h2>
-		{#if !cargando}
-			<button class="boton--suave boton--chico" onclick={() => cargar()}>Revisar otra vez</button>
-		{/if}
+		<h2><Icon name="campana" tamaño={19} clase="ico ico--accion" />Huecos para quien espera</h2>
+		<button class="boton--suave boton--chico" disabled={cargando} onclick={() => cargar()}>
+			<Icon name="recargar" tamaño={15} clase={cargando ? 'giro' : undefined} />
+			{cargando ? 'Revisando…' : 'Revisar otra vez'}
+		</button>
 	</div>
 
 	<p class="aviso">
@@ -145,15 +147,22 @@
 						href={aviso.whatsapp}
 						target="_blank"
 						rel="noopener noreferrer"
-					>WhatsApp</a
+						><Icon name="mensaje" tamaño={15} />WhatsApp</a
 					>
 				{:else}
 					<span class="aviso">sin WhatsApp: teléfono no internacional</span>
 				{/if}
 				{#if aviso.correo}
-					<a class="boton--suave boton--chico enlace-boton" href={aviso.correo}>Correo</a>
+					<a class="boton--suave boton--chico enlace-boton" href={aviso.correo}><Icon name="correo" tamaño={15} />Correo</a>
 				{/if}
-				<button class="boton--suave boton--chico" onclick={() => copiar(aviso)}>
+				<!-- El botón cambia de color y de palabra a la vez: el portapapeles no devuelve aviso. -->
+				<button
+					class="boton--suave boton--chico"
+					class:ok={copiado === aviso.id}
+					class:pulso={copiado === aviso.id}
+					onclick={() => copiar(aviso)}
+				>
+					<Icon name={copiado === aviso.id ? 'check' : 'copiar'} tamaño={15} />
 					{copiado === aviso.id ? 'Copiado' : 'Copiar mensaje'}
 				</button>
 				<button
@@ -161,6 +170,11 @@
 					disabled={ocupada === aviso.id}
 					onclick={() => reservar(aviso)}
 				>
+					{#if ocupada === aviso.id}
+						<Icon name="recargar" tamaño={15} clase="giro" />
+					{:else}
+						<Icon name="calendario" tamaño={15} />
+					{/if}
 					{ocupada === aviso.id ? 'Guardando…' : 'Reservar por él'}
 				</button>
 			</div>
@@ -168,10 +182,10 @@
 	{/each}
 
 	{#if guardado}
-		<p class="aviso">{guardado}</p>
+		<p class="aviso hecha" role="status"><Icon name="check" tamaño={15} />{guardado}</p>
 	{/if}
 	{#if mensaje}
-		<p class="error" role="alert">{mensaje}</p>
+		<p class="error" role="alert"><Icon name="alerta" tamaño={15} />{mensaje}</p>
 	{/if}
 </section>
 
@@ -202,6 +216,7 @@
 	.enlace-boton {
 		display: inline-flex;
 		align-items: center;
+		gap: 0.3rem;
 		text-decoration: none;
 		border: 1px solid var(--borde);
 		border-radius: 10px;
