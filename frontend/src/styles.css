@@ -404,11 +404,16 @@ button:active:not(:disabled),
 }
 
 /* La marca de diente de la página pública se dibuja sola al entrar: es el saludo de la consulta.
-   Solo con movimiento permitido; sin él, el trazo aparece completo. */
+   Solo con movimiento permitido; sin él, el trazo aparece completo.
+
+   El 100 no es una medida de píxeles: el `<path>` del diente lleva `pathLength="100"`, así que el
+   número sigue al contorno real sea cual sea el tamaño. Con la longitud física (65) y un dash de 460
+   como poníamos antes, el dibujado ocurría solo en el último 14 % de la animación y el resto del
+   tiempo no pasaba nada visible. */
 @media (prefers-reduced-motion: no-preference) {
 	.marca-diente > svg > path {
-		stroke-dasharray: 460;
-		stroke-dashoffset: 460;
+		stroke-dasharray: 100;
+		stroke-dashoffset: 100;
 		animation: trazo 1.5s var(--curva) 0.15s forwards;
 	}
 

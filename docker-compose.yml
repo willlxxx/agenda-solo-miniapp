@@ -1,5 +1,12 @@
-# Base de datos canónica para entornos con Docker.
-# En esta máquina no hay Docker: usa el script scripts/postgres.ps1 (ver README).
+# Los dos contenedores del despliegue: el PostgreSQL y la app (API + interfaz en el mismo proceso).
+#
+# `docker compose up -d` es la forma canónica de levantar esto en un host con Docker. En esta máquina
+# el desarrollo usa `scripts/postgres.ps1` en el 5433 —no porque falte Docker, que hay, sino porque el
+# venv, pytest y el editor apuntan a una sola base sin depender del daemon.
+#
+# El `version` es para el docker-compose antiguo (1.x): sin él interpreta formato v1 y rechaza el
+# archivo entero. El compose de hoy lo ignora. La 3.7 es la última que entiende ese 1.x.
+version: '3.7'
 services:
   postgres:
     image: postgres:16
@@ -16,6 +23,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  app:
+    build: .
+    ports:
+      - '8000:8000'
+    environment:
+      # Dentro de la red del compose la base se llama `postgres` y escucha el 5432 de siempre.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agenda_dev
+      # 'produccion' activa el guardia de arranque: con el JWT_SECRET del repositorio el contenedor NO
+      # levanta, que es exactamente lo que se quiere ver en el log del deploy.
+      ENTORNO: desarrollo
+      # Ponlos tú (o inyéctalos con `--env-file` / secrets del host). `arranque.sh` reintenta la
+      # migración dos minutos, así que el orden de arranque de los dos contenedores no importa.
+      JWT_SECRET: cambia-esto-en-produccion-por-al-menos-32-bytes-aleatorios
+      CRON_SECRET: ''
+      # Sin SMTP el proveedor sigue siendo el simulado: no sale nada fuera, el aviso se guarda en la base.
+      RECORDATORIOS_PROVEEDOR: simulado
+    depends_on:
+      - postgres
+    restart: unless-stopped
 
 volumes:
   pgdata:

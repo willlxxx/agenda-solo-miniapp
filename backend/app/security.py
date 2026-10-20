@@ -50,7 +50,10 @@ def set_session_cookie(response: Response, token: str) -> None:
         value=token,
         httponly=True,
         samesite="lax",
-        secure=s.frontend_origin.startswith("https"),
+        # La manda el entorno, no FRONTEND_ORIGIN: desde que la interfaz y la API son el mismo origen,
+        # el string del dev server (5173) no dice nada de si el sitio va por https. Un despliegue
+        # público lleva siempre `Secure`, y en local el navegador no la aceptaría por http.
+        secure=s.es_produccion,
         max_age=s.jwt_ttl_dias * 86400,
         path="/",
     )

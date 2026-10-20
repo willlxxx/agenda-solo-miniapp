@@ -1,0 +1,34 @@
+# Lo que lee Railway al desplegar el servicio de la agenda. `railway.cron.toml` es el mismo contenedor
+# con otra orden de arranque, para el servicio programado de los avisos.
+#
+# Importantes dos cosas de Railway, verificadas en su documentación:
+#   - «Configuration defined in code will always override values from the dashboard»: lo puesto aquí no
+#     se puede cambiar luego desde el panel, así que este archivo no lleva nada que se afinque a mano.
+#   - El archivo de configuración se elige por servicio en su página de Settings. De ahí que el cron use
+#     otro archivo y no un bloque extra en este: los dos servicios salen del mismo repositorio y de la
+#     misma imagen.
+#
+# No hay secretos aquí, y no los habría nunca: JWT_SECRET, CRON_SECRET y las credenciales de SMTP se
+# ponen en el panel (o con `railway variable set --secret`), no en un archivo que se sube a GitHub.
+
+"$schema" = "https://railway.com/railway.schema.json"
+
+[build]
+# El Dockerfile se detecta solo si está en la raíz, pero se deja dicho: un cambio de detector en el host
+# convertiría este despliegue en un RAILPACK intentando construir un monorepo que no es de Node.
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Migra y levanta. Dentro del script está el reintento de la migración, porque la base de datos del
+# proyecto sube a la vez que la app y un primer despliegue sin tablas no es un 500 bonito: es un
+# consultorio que a las ocho de la mañana no puede abrir su panel.
+startCommand = "sh scripts/arranque.sh"
+
+# /healthz no necesita sesión ni base de datos: si responde, el proceso está vivo. El tiempo de espera
+# es alto a propósito: la migración va por delante de la escucha y un arranque con tablas nuevas aún no
+# contesta, aunque esté sano.
+healthcheckPath = "/healthz"
+healthcheckTimeout = 300
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 10

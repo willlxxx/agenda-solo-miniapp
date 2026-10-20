@@ -1,0 +1,31 @@
+# El segundo servicio del despliegue: el cron de los avisos. Misma imagen, mismo repositorio, otra
+# orden de arranque. En Railway se activa poniendo este archivo como configuración del servicio
+# (Settings → Config as Code), porque el código siempre gana al panel y los dos servicios comparten repo.
+#
+# Necesita dos variables en el servicio, ambas con la misma semilla que en la agenda:
+#   API_URL      la dirección pública del servicio web, con https:// y sin barra final
+#   CRON_SECRET  el mismo secreto que lee la app; vacío, las rutas internas responden 503
+#
+# No define healthcheckPath: el trabajo termina y el proceso se va, que es exactamente lo que pide el
+# cron de Railway («el servicio debe terminar en cuanto acaba la tarea»).
+
+"$schema" = "https://railway.com/railway.schema.json"
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Una pasada y fuera. El script es solo stdlib, sin tocar nada de `app`: la imagen slim no lleva curl,
+# y si el día de mañana se cambia de host, un `python scripts/cron.py` se pone tal cual en un crontab.
+startCommand = "python scripts/cron.py recordatorios"
+
+# Cada cuarto de hora, como pide la ventana de avisos. Railway no admite menos de 5 minutos entre
+# ejecuciones, así que esto cabe holgado. Se puede adelantar o retrasar un tick: el despacho mira la
+# base, no el reloj del contenedor, y lo ya enviado no se repite.
+cronSchedule = "*/15 * * * *"
+
+# Si un tick cae por una red movida, repetir es seguro: las banderas de envío están en la base. Más de
+# un reintento no sirve de nada —si la API está caída, los siguientes 15 minutos también lo estarán—.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 1

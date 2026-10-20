@@ -32,7 +32,10 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -e ".[dev]"
-      - run: ruff check app tests
+      # ../scripts entra también: `cron.py` es parte del despliegue y un linter que no lo ve deja que
+      # se cuele ahí lo que en app/ y tests/ se rechaza. Se le apunta el config a pelo porque el repo no
+      # tiene pyproject en la raíz, y sin eso ruff usaría sus defectos (88 columnas) para ese archivo.
+      - run: ruff check app tests && ruff check --config pyproject.toml ../scripts
       - run: alembic upgrade head
       - run: alembic check
       - run: pytest -q

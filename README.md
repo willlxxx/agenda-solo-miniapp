@@ -20,8 +20,11 @@ Plan completo: [`PLAN-SEMANA-1.md`](PLAN-SEMANA-1.md).
 
 ```
 backend/   FastAPI: app/{models,schemas,api/v1}, alembic/, tests/
-frontend/  SvelteKit: landing, /auth/registro, /auth/acceso, /panel
-scripts/   postgres.ps1 (PostgreSQL local sin Docker)
+frontend/  SvelteKit: landing, /auth/registro, /auth/acceso, /panel; el build estático lo sirve la API
+scripts/   arranque.sh (migración + uvicorn, el mismo dentro del contenedor), cron.py (el disparador que
+           lanza el cron del host), postgres.ps1 (PG local)
+Dockerfile docker-compose.yml   el despliegue: una imagen con API + interfaz, y su PostgreSQL
+railway.toml railway.cron.toml  los dos servicios de Railway: la agenda y el aviso programado
 ```
 
 ## Ponerse en marcha
@@ -56,10 +59,15 @@ npm install
 npm run dev          # http://localhost:5173, con proxy /api -> :8000
 ```
 
+Sin el dev server, la interfaz construida (`npm run build`) la sirve la propia API en el 8000: con
+el venv en el PATH, `sh scripts/arranque.sh` migra y levanta las dos cosas en un proceso. Es también
+el comando del despliegue (abajo, «Publicarlo»).
+
 ## Pruebas
 
 ```bash
-cd backend && pytest -q          # 276 pruebas sobre PostgreSQL real (base agenda_test autogestionada)
+cd backend && pytest -q          # 340 pruebas: 278 sobre PostgreSQL real (base agenda_test autogestionada)
+                                 # y 62 sin base: guardia de arranque, URL del host, estáticos y cron
 cd frontend && npm run check     # svelte-check, 0 errores
 ```
 
@@ -419,11 +427,14 @@ Qué se eligió y por qué:
   títulos, el resto sans)—, y el único archivo nuevo es `frontend/static/favicon.svg`, propio. La
   declaración de terceros de la página pública sigue siendo cierta sin tocarla.
 - **El diente es el hilo**, no un adorno suelto: la cabecera de la página pública lo dibuja con un
-  trazo animado (`stroke-dashoffset`, solo si el navegador no pide `prefers-reduced-motion`), cada
-  servicio lleva su diente con el color que el médico le asignó, y "Servicios" del panel repite el
-  gesto. La secuencia de reserva se lee como un raíl de tres pasos (`Servicio → Día y hora → Tus
-  datos`) que marca lo hecho en verde y lo presente en menta, para que el paciente sepa cuántos
-  pasos le quedan sin contar con que entienda el inglés de una barra de progreso.
+  trazo animado (`stroke-dashoffset`, solo si el navegador no pide `prefers-reduced-motion`). El
+  contorno del diente mide 65 unidades y el trazo usa `pathLength="100"`, así que el `dasharray` se
+  cuenta sobre 100 y el dibujo ocupa **toda** la animación: con la longitud física y un dash de 460
+  —lo que había antes— el diente aparecía entero en el último 14 % y el resto del tiempo no pasaba
+  nada visible. Cada servicio lleva su diente con el color que el médico le asignó, y "Servicios" del
+  panel repite el gesto. La secuencia de reserva se lee como un raíl de tres pasos (`Servicio → Día y
+  hora → Tus datos`) que marca lo hecho en verde y lo presente en menta, para que el paciente sepa
+  cuántos pasos le quedan sin contar con que entienda el inglés de una barra de progreso.
 - **Ningún estado depende solo del color o del movimiento.** "Copiado" cambia de texto, de icono y de
   color a la vez, y lo mismo dice una franja abierta/cerrada (además de la opacidad, la palabra). Los
   botones que se quedaron solo icono conservan su `aria-label`, y el aviso de copiar va en un
@@ -457,17 +468,240 @@ Está en `frontend/src/styles.css` (tokens, estados, animaciones), `frontend/src
 `Horario.svelte`, `Avisos.svelte`, `ListaDeEspera.svelte`, `Servicios.svelte`, `Retencion.svelte` y
 `routes/d/[slug]/+page.svelte`.
 
+## Publicar: la interfaz la sirve el propio FastAPI (Semana 2)
+
+`frontend/vite.config.ts` usa **`@sveltejs/adapter-static` con `fallback: 'index.html'`**, y el
+adaptador va **dentro de `sveltekit({ adapter: … })`**: en SvelteKit 3 un plugin de adaptador suelto
+en `plugins` se ignora en silencio, el build termina con el aviso `adapter_missing` y no hay carpeta
+`build/`. Con `npm run build` ya sale `frontend/build/` (241 KB: `index.html`, `_app/`, favicon y
+`robots.txt`).
+
+Por qué estático y no un servidor Node: las dos pantallas con estado llevan `export const ssr = false`
+y no existe ningún `+page.server.ts` ni `+server.ts`, o sea que el navegador hace todo el trabajo.
+`adapter-node` sería levantar un segundo proceso en otro puerto, con CORS y con la cookie del médico
+viajando entre dos orígenes, para mover el mismo HTML que cabe en un `FileResponse`. Así hay **un solo
+proceso** (`uvicorn`) y la cookie `HttpOnly` `SameSite=Lax` es del mismo origen sin abrir nada.
+
+`backend/app/main.py` monta la carpeta (`carpeta_interfaz()` + `montar_interfaz(app, …)`) **después**
+de las rutas de API:
+
+- `/_app/**` va por `StaticFiles` envuelto en `_Inmutable`, que le pone
+  `cache-control: public, max-age=31536000, immutable`: el nombre del archivo es un hash del contenido,
+  así que caducarlo un año no puede servir nunca algo viejo, y un paciente que vuelve al enlace desde
+  el móvil no baja otra vez los 240 KB. Starlette no admite `max_age`, de ahí el envoltorio ASGI.
+- El resto se resuelve con una ruta comodín de `GET` **y `HEAD`** (un monitor, un CDN o un `curl -I`
+  contra un servidor que responde 405 a HEAD se lee como servidor caído): si el archivo existe se
+  manda, con `resolve()` + `is_relative_to()` para que ninguna forma de `..` saque la lectura de la
+  carpeta; si no, se manda `index.html` con `Cache-Control: no-cache`. Eso es lo que hace que un enlace
+  directo a `/panel` o a `/d/<slug>` funcione sin configuración de servidor, y que un despliegue nuevo
+  no deje a un paciente con el HTML que apunta a los archivos del build anterior.
+- Una ruta `/api/…` inexistente sigue respondiendo **404 en JSON**, no un `index.html` disfrazado de
+  error.
+- Si no hay `frontend/build` —la API sola, o CI, donde `backend` y `frontend` son jobs separados y el
+  build nunca llega al job de las pruebas— `carpeta_interfaz()` devuelve `None` y el montaje se salta
+  entero. La carpeta es `frontend/build` del monorepo o lo que marque `FRONTEND_BUILD`.
+
+`backend/tests/test_estaticos.py` (6 pruebas, sin base de datos) monta un build de mentira con un
+`secreto.env` al lado y comprueba los enlaces profundos, el 404 JSON de la API, cuatro formas de
+salirse de la carpeta, el `HEAD /panel` y que sin build no se monta nada.
+
+En local, ese mismo arranque es `sh scripts/arranque.sh` con el venv en el PATH (hace la migración y
+levanta la API con la interfaz dentro en el 8000).
+
+## Publicarlo: la imagen, los secretos y el cron
+
+Código no hace falta más: `Dockerfile`, `docker-compose.yml` y `scripts/arranque.sh` son el
+despliegue. Lo que queda es un host, dos secretos y las dos pegas del cron.
+
+**La imagen** tiene dos etapas y un solo proceso al final. Node existe solo en la primera
+(`npm ci` + `npm run build`); la segunda instala el backend con `pip install ./backend` y copia el
+build a `/app/frontend/build`, que es donde `carpeta_interfaz()` lo encuentra sin poner
+`FRONTEND_BUILD`. El `CMD` es `sh /app/scripts/arranque.sh`, y el `HEALTHCHECK` llama a `/healthz`
+con `urllib` porque en la imagen slim no hay `curl` y bajarlo sería un segundo sistema que mantener.
+`.dockerignore` deja fuera `backend/.env`, `node_modules`, `.svelte-kit`, `frontend/build` y el venv:
+la clave con la que se firman las sesiones no viaja dentro de una imagen que se sube a un registro.
+
+**Lo que no se pudo verificar en esta máquina**, dicho para que no se cuelen como probado: el daemon
+de aquí es Boot2Docker 19.03 (kernel 4.19, 1 CPU, 1 GB) y no admite crear hilos dentro de un
+contenedor. `npm ci` aborta en `uv_thread_create` y `pip install` en `RuntimeError: can't start new
+thread`. Es el virtualizador, no el Dockerfile, pero significa que **la construcción completa de la
+imagen hay que verla en el host real**. Lo que sí está comprobado aquí: el reparto de rutas dentro de
+la imagen (`/app/frontend/build` con su `index.html`, su `_app`, su favicon y su `robots.txt`, y
+`/app/scripts/arranque.sh` dentro), que `docker-compose config` acepta el archivo con los dos
+servicios, y que `scripts/arranque.sh` arranca API + interfaz tal cual fuera de un contenedor.
+
+**La base de datos que entrega el host vale tal cual** (`normalizar_url_database` en
+`backend/app/config.py`, 19 pruebas). Railway, Neon, Supabase o Render inyectan en el servicio
+`DATABASE_URL` con la forma `postgresql://usuario:clave@host:6543/base?sslmode=require`, y con la pila
+de este proyecto eso no conecta dos veces: sin `+asyncpg` SQLAlchemy busca psycopg (no está instalado),
+y con `+asyncpg` añadido a mano asyncpg rechaza el argumento —`TypeError: connect() got an unexpected
+keyword argument 'sslmode'`, probado con SQLAlchemy 2.1.5 y asyncpg 0.32— antes de abrir el socket. La
+app traduce el esquema a `postgresql+asyncpg://` y `sslmode` a `ssl`, que es como asyncpg llama a los
+mismos modos de libpq (`require`, `verify-ca`, `verify-full`, `disable`), y deja el resto de la query
+intacto. Se hace aquí y no en el panel porque el valor del proveedor no se puede editar, y porque
+`alembic/env.py` lee el mismo ajuste: la migración, que es lo primero que corre en el arranque, también
+lo necesita. SQLite y un `postgres://` mal formado **no se reescriben**: el guardia de arranque tiene
+que poder enseñar el valor original en su mensaje.
+
+**El comando de arranque** es el mismo en el contenedor, en un Fly, en Railway o en un systemd:
+`alembic upgrade head` y `uvicorn --host 0.0.0.0 --port $PORT --proxy-headers`. La migración va
+dentro y reintentada hasta dos minutos porque app y base de datos arrancan a la vez, y un contenedor
+que muere en el intento 1 es un despliegue que parece roto sin estarlo. `--proxy-headers` es lo que
+hace que detrás del proxy los enlaces y el log salgan con el esquema y el host verdaderos. La lista de
+confianza se pasa por variable de entorno (`FORWARDED_ALLOW_IPS`, por defecto `*`) y **no** por
+bandera: con `--forwarded-allow-ips '*'` el `*` lo expande el shell y uvicorn recibe el listado de la
+carpeta como argumentos sueltos; pasó aquí, se arregló así.
+
+**`ENTORNO=produccion` activa el guardia** (`backend/app/arranque.py`, 20 pruebas). Se ejecuta al
+importar la app, antes de abrir el puerto:
+
+```
+El despliegue no arranca:
+- JWT_SECRET sigue siendo el de desarrollo: con el repositorio delante, cualquiera puede firmarse
+  una cookie válida y entrar en el panel de cualquier consultorio.
+```
+
+No arranca con: el `JWT_SECRET` del repo **o el de `.env.example`** (copiar el ejemplo y cambiar solo
+`ENTORNO` es el fallo del despliegue de quince minutos), uno de menos de 32 caracteres, un
+`DATABASE_URL` que no sea PostgreSQL (con SQLite la agenda va en local y dos reservas simultáneas se
+pisan, porque no hay advisory lock), o un `ENTORNO` mal escrito —`production`, vacío—, porque un typo
+no puede significar «me quedé sin comprobaciones». Son **avisos** por el log, no fallos: `CRON_SECRET`
+vacío (las dos rutas internas responden 503) y `RECORDATORIOS_PROVEEDOR=smtp` a medias. Con ese
+entorno la cookie de sesión sale con `Secure`, y eso ya no depende del string de `FRONTEND_ORIGIN`.
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"   # JWT_SECRET
+python -c "import secrets; print(secrets.token_urlsafe(24))"   # CRON_SECRET
+```
+
+**Las dos pegas** (`scripts/cron.py`, 17 pruebas: una llamada y el proceso se acaba):
+`POST /api/v1/internal/recordatorios` cada 15 minutos con la cabecera `x-cron-secret`, y
+`POST /api/v1/internal/limpieza` una vez al día. El guion es solo stdlib porque la imagen final no lleva
+`curl` y porque el servicio del cron no necesita leer la base: habla con la API como cualquier cliente.
+Acepta `recordatorios` y `limpieza`, `--simular` para la primera pasada, `--url` y `--secreto` (o
+`API_URL` y `CRON_SECRET` del entorno), y sale con 2 si falta configuración, 3 si la API respondió error
+y 4 si no se llegó. Reintentar es seguro: lo enviado está marcado en la base y la limpieza va en
+transacción con candado. La primera pasada de la limpieza de cada despliegue, con `--simular`: son los
+mismos `DELETE` bajo el mismo candado y deshace la transacción, así que se ven las cuentas exactas antes
+de perder una fila.
+
+**Ruta corta con Docker Compose en un VPS**: `docker compose up -d` levanta `postgres` y `app`; en el
+`docker-compose.yml` están `ENTORNO=desarrollo` y el `JWT_SECRET` del ejemplo a propósito, para que
+nadie suba el archivo tal cual a producción y se lleve el chasco de que el contenedor no arranca.
+Cámbialos por secretos reales y pon `ENTORNO=produccion`.
+
+**Ruta corta con otro host de imágenes** (Fly, un PaaS que construya el `Dockerfile`): en variables
+`DATABASE_URL` (la del host tal cual, se traduce arriba), `ENTORNO=produccion`, `JWT_SECRET`,
+`CRON_SECRET`, y `FRONTEND_ORIGIN=https://tu-dominio` (hoy no interviene para nada en la sesión, pero
+deja el CORS apuntando al sitio real por si las dos mitades se separan algún día). Comprobación del
+primer arranque, en este orden: `/healthz` da 200, `/panel` devuelve HTML, `/api/v1/services` da **401**
+(no 200 con el HTML disfrazado), y en el log no hay ningún `aviso de despliegue`. Después: registrar la
+consulta en `/auth/registro`, pegar el enlace en el móvil, pasar una cita de prueba y borrarla desde el
+panel. En Railway, que es el host elegido, esos pasos están concretos abajo.
+
+**El correo** es lo último, porque es lo único que escribe fuera: `RECORDATORIOS_PROVEEDOR=smtp`,
+`SMTP_HOST`, `SMTP_DE` (muchos proveedores rechazan un `From` que no es la cuenta autenticada),
+`SMTP_USUARIO`/`SMTP_CONTRASENA` y `SMTP_SSL=true` solo con el 465. Hasta entonces el simulado guarda
+en la base lo que habría mandado, y la página pública no promete nada que no esté pasando.
+
+## Railway: los clics, los dos servicios y las variables
+
+Host elegido: **Railway**, con la cuenta del fundador. Son **dos servicios del mismo repositorio y la
+misma imagen**: `agenda` (la web, la que ve el paciente) y `cron-avisos` (el programado, una pasada cada
+quince minutos). El orden es este:
+
+**0. El repo publicado.** Railway construye desde GitHub, no desde esta máquina: `railway up` con un
+`Dockerfile` propio sigue sin estar soportado (así lo llama el issue abierto
+[`railwayapp/cli#819`](https://github.com/railwayapp/cli/issues/819)) y el Docker de aquí no admite crear
+hilos dentro de un contenedor. Antes de nada, por tanto, `main` tiene que llevar el `Dockerfile` y todo
+lo de estas dos semanas.
+
+**1. El proyecto.** New Project → **Deploy from GitHub repo** → `willlxxx/agenda-solo-miniapp`. La primera
+vez pide instalar la app de Railway en el repo, y eso se hace con su cuenta. Railway usa el `Dockerfile`
+si lo encuentra en la raíz; `railway.toml` está para que no dependa de un autodetección y para fijar el
+arranque y el healthcheck. Ojo con una regla del host, verificada en su documentación: **«la
+configuración definida en código siempre gana a los valores del panel»** — si algo no cuadra, se cambia
+el archivo, no la pantalla.
+
+**2. La base de datos.** New → PostgreSQL. **No hay que tocar la variable**: Railway inyecta en el
+servicio un `DATABASE_URL` de su forma, y `normalizar_url_database` lo traduce (arriba, «La base de datos
+que entrega el host vale tal cual»). La primera vez que se despliegue conviene mirar el log de
+`arranque.sh`: si la migración llega hasta `Running upgrade` es que la URL se abrió bien.
+
+**3. Variables del servicio web** (Settings → Variables):
+
+```
+ENTORNO=produccion
+JWT_SECRET            el token_urlsafe(32), como secreto
+CRON_SECRET           el token_urlsafe(24), como secreto
+RECORDATORIOS_PROVEEDOR=simulado        hasta tener el SMTP del doctor
+FRONTEND_ORIGIN=https://<dominio>
+DATABASE_URL          (la pone Railway sola)
+```
+
+Con `ENTORNO=produccion` el guardia se niega a arrancar si `JWT_SECRET` sigue siendo el del repo o el
+del ejemplo, y la cookie de sesión sale con `Secure`.
+
+**4. El dominio.** Settings → Networking → **Generate domain**. Con esa dirección se rellena
+`FRONTEND_ORIGIN` (no afecta a la cookie, pero deja el CORS apuntando al sitio real) y se hace la
+comprobación: `/healthz` da 200, `/panel` devuelve HTML, `/api/v1/services` da **401** —no 200 con el
+HTML disfrazado— y en el log no aparece ningún `aviso de despliegue`. Después, registrar la consulta en
+`/auth/registro`, pegar el enlace en el móvil, pasar una cita de prueba y borrarla desde el panel. En
+producción no hay datos sembrados: la cuenta de prueba de esta máquina no viaja.
+
+**5. El servicio del cron.** Another service → Deploy from GitHub repo → el mismo repo, otra vez. En su
+página de Settings se le pone como archivo de configuración **`railway.cron.toml`** (Railway permite
+elegir el archivo por servicio; es lo que permite que los dos vivan en el mismo repositorio con órdenes
+de arranque distintas). Sus variables:
+
+```
+API_URL=https://<dominio del servicio web>
+CRON_SECRET           el mismo valor, otra vez
+```
+
+El horario viene de `cronSchedule = "*/15 * * * *"` en ese archivo. Si el panel no lo refleja, se escribe
+en Settings → Cron Schedule: el límite del host es que dos ejecuciones estén separadas **al menos 5
+minutos en UTC**, así que un cuarto de hora cabe holgado. No lleva `healthcheckPath`: el trabajo termina
+y el proceso se va, que es justo lo que pide el cron de Railway.
+
+**6. Comprobar el primer tick** (log del servicio `cron-avisos`). Cada línea dice el estado y los
+contadores que devuelve la ruta interna, nunca datos de un paciente:
+
+- `recordatorios 200: {"enviados": 0, ...}` → funcionando; con `RECORDATORIOS_PROVEEDOR=simulado` los
+  avisos se registran en la base y no salen correos.
+- `recordatorios 401` → `CRON_SECRET` distinto en los dos servicios.
+- `recordatorios 503` → el `CRON_SECRET` del servicio web está vacío y las rutas internas están apagadas.
+- `fallo: no se pudo llamar a https://…` → `API_URL` mal escrito, o la agenda aún no había levantado.
+
+**7. Lo que queda apagado a propósito: la limpieza.** La decisión del primer despliegue es lanzar solo
+los avisos; la ruta que borra el histórico viejo se deja fuera hasta ver las cuentas. Cuando toque, un
+tercer servicio igual que `cron-avisos` pero con
+
+```
+startCommand = "python scripts/cron.py limpieza --simular"
+```
+
+y un horario diario. La primera semana se lee el `--simular` (deshace la transacción: enseña cuántas
+filas cerradas tiene cada consultorio fuera de su plazo); cuando cuadre, se quita el flag.
+
+**Lo que no puedo verificar desde esta máquina**, para que no cuente como probado: que Railway construya
+la imagen (es el primer despliegue real, y depende de sus servidores), el plan y el coste de los dos
+cron, y que un tick salga de verdad. Lo que sí está comprobado aquí: la traducción de la URL del host, el
+guion del cron contra una red falsa, el guardia de arranque, `arranque.sh` levantando API e interfaz, y
+que `railway.toml` y `railway.cron.toml` parsean y usan claves y valores que existen en el esquema
+oficial de Railway (`https://railway.com/railway.schema.json`).
+
 ## Siguiente paso
 
 El paciente reserva, el doctor gestiona su semana, recoge a quien se quedó sin hueco, le ofrece una
 hora real cuando la hay, y el paciente recibe el aviso de su cita sin que nadie lo escriba. Lo que
 falta:
 
-- **Antes de publicar**: generar un `JWT_SECRET` nuevo y un `CRON_SECRET` (los de `backend/.env` son
-  de desarrollo y ese archivo nunca se sube), montar el cron con los dos `curl` (recordatorios cada
-  15 min, limpieza una vez al día, `?simular=true` la primera vez para ver cuentas antes de borrar),
-  y poner el SMTP real del doctor (`RECORDATORIOS_PROVEEDOR=smtp` + `SMTP_HOST`/`SMTP_DE`). Sin esas
-  cosas la agenda funciona, no envía avisos y no borra su histórico viejo.
+- **Antes de publicar**: el host está decidido (Railway) y los pasos están escritos arriba, «Railway: los
+  clics, los dos servicios y las variables». Lo que sigue en mano del fundador es ejecutarlos con su
+  cuenta —ahí se verá por primera vez si la imagen construye en los servidores de Railway, que esta
+  máquina no puede comprobar— y el SMTP real del doctor, que es lo único que hace que salga un correo de
+  verdad. La limpieza por cron sigue apagada a propósito hasta leer la primera pasada en `--simular`.
 - Panel: la mini-ficha de cada cita ya dice cuándo se recordó (y el export lo lleva por escrito). Lo
   que falta es la vista de conjunto: una columna con el estado de los avisos de toda la semana, para
   responder a "no me avisasteis" sin ir cita por cita.

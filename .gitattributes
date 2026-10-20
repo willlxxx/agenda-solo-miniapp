@@ -1,0 +1,7 @@
+# Los guiones de arranque se comprobaban con `sh` en Git Bash, pero el despliegue los ejecuta dentro de
+# un contenedor Linux y quien los clona puede estar en Windows. Con `core.autocrlf` al uso, un checkout
+# en Windows deja `scripts/arranque.sh` con CRLF y el contenedor muere en el primer `set -eu`, que es un
+# fallo de despliegue imposible de adivinar desde el log. Se fijan LF aquí y para siempre.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf

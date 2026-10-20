@@ -1,0 +1,23 @@
+# Lo que NUNCA debe entrar en una imagen, dicho por su dueño:
+
+# El secreto del despliegue. Si esto entrase, la imagen llevada a un registro público llevaría la clave
+# con la que se firman las sesiones del consultorio.
+backend/.env
+
+# Se construyen dentro; si se copian desde la máquina, un build viejo sustituye al de la etapa de Node.
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+backend/.venv
+
+# Basura local sin sentido en el contenedor.
+.git
+.ruff_cache
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Documentación y planes del repo: no los lee la app.
+PLAN-SEMANA-1.md
+**/.DS_Store
