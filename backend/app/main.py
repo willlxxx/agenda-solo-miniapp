@@ -3,7 +3,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import agenda, auth, availability, blocked, public, recordatorios, services, waitlist
+from app.api.v1 import (
+    agenda,
+    auth,
+    availability,
+    blocked,
+    limpieza,
+    pacientes,
+    public,
+    recordatorios,
+    retencion,
+    services,
+    waitlist,
+)
 from app.config import get_settings
 
 app = FastAPI(title="Agenda Solo API", version="0.1.0", docs_url="/docs")
@@ -23,8 +35,11 @@ for router in (
     blocked.router,
     agenda.router,
     waitlist.router,
+    pacientes.router,
+    retencion.router,
     public.router,
     recordatorios.router,
+    limpieza.router,
 ):
     app.include_router(router, prefix="/api/v1")
 

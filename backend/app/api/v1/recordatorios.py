@@ -13,32 +13,19 @@ Tampoco sale en `/docs`: no es un contrato público, y la propia existencia de l
 información útil para quien la quiera probar.
 """
 
-import hmac
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_ahora, get_proveedor_correo, get_session
-from app.config import get_settings
+from app.api.deps import comprobar_secreto_cron, get_ahora, get_proveedor_correo, get_session
 from app.schemas import ResumenRecordatorios
 from app.services.correo import Proveedor
 from app.services.despacho import despachar
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-
-def _comprobar_secreto(cabecera: str | None) -> None:
-    secreto = (get_settings().cron_secret or "").strip()
-    if not secreto:
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="El despacho de recordatorios está apagado: define CRON_SECRET en el backend",
-        )
-    # compare_digest: que el tiempo de comparación no dependa de cuántos aciertos hay por delante.
-    # En bytes, porque con caracteres fuera de ASCII `compare_digest` lanza TypeError.
-    if not cabecera or not hmac.compare_digest(cabecera.encode(), secreto.encode()):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Secreto de cron incorrecto")
+APAGADO = "El despacho de recordatorios está apagado: define CRON_SECRET en el backend"
 
 
 @router.post("/recordatorios", response_model=ResumenRecordatorios, include_in_schema=False)
@@ -54,5 +41,5 @@ async def ejecutar(
     repite. Es lo que hace utilisable el cron como herramienta de soporte ("avísame otra vez, que
     no llegó") sin riesgo de hostigar a nadie.
     """
-    _comprobar_secreto(x_cron_secret)
+    comprobar_secreto_cron(x_cron_secret, apagado=APAGADO)
     return ResumenRecordatorios.model_validate(await despachar(session, proveedor, ahora=ahora))

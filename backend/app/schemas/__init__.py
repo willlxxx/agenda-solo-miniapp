@@ -350,3 +350,105 @@ class ResumenRecordatorios(BaseModel):
     errores: int
     agotados: int
     husos_invalidos: int
+
+
+class ResumenLimpieza(BaseModel):
+    """Contadores de una pasada de retención. Tampoco salen datos del paciente.
+
+    `simulada` importa en el log: una pasada de ensayo muestra exactamente lo que borraría la real,
+    y sin este campo las dos leerían igual en el cron. `conflictos` es la señal de que hubo que
+    deshacer la tanda de un consultorio porque entró una reserva a mitad.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    doctores: int
+    citas_eliminadas: int
+    peticiones_eliminadas: int
+    fichas_eliminadas: int
+    fichas_en_uso: int
+    confirmadas_sin_cerrar: int
+    conflictos: int
+    simulada: bool
+
+
+class RetencionIn(BaseModel):
+    """Cuánto tarda en borrarse una cita cerrada. La banda la fija el dominio, no este esquema."""
+
+    meses: int = Field(ge=6, le=12, description="Meses de retención del consultorio (6 a 12)")
+
+
+class RetencionPublic(BaseModel):
+    """El plazo del consultorio y la frase que explica qué hace. El panel no reinventa la frase."""
+
+    meses: int
+    explicacion: str
+
+
+# --- Ficha del paciente: export y supresión (RGPD art. 15, 17 y 20) ---
+
+
+class CitaDeFicha(BaseModel):
+    """La cita como la ve su dueño: en su huso, y con la prueba del consentimiento anexa."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    inicio_utc: datetime
+    fecha: date
+    hora: time
+    fin: time
+    duracion_minutos: int
+    estado: str
+    # 'publico' = la clicó el paciente; 'panel' = la escribió el médico attestando su petición.
+    origen: str
+    servicio: str | None
+    consentimiento_en: datetime
+    recordatorio_24h_en: datetime | None
+    recordatorio_1h_en: datetime | None
+    recordatorio_intentos: int
+
+
+class PeticionDeFicha(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    fecha: date | None
+    preferencia: str | None
+    estado: str
+    servicio: str | None
+    pedido_utc: datetime
+    avisado_utc: datetime | None
+
+
+class FichaPaciente(BaseModel):
+    """La ficha que abre el panel desde una cita, con lo que hay guardado de esa persona.
+
+    Es el único sitio donde salen el email y la última visita juntos, y siempre tras la cookie de
+    sesión: la lista de la agenda sigue pintando nombre y teléfono, nada más.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    nombre: str
+    telefono: str | None
+    email: str | None
+    ultima_visita: date | None
+    creado_en: datetime
+    timezone: str
+    citas: list[CitaDeFicha]
+    peticiones: list[PeticionDeFicha]
+    # Lo que el panel muestra como consecuencia del borrado, antes de que nadie pulse.
+    aviso: str
+
+
+class Supresion(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    paciente: str
+    # Cuántas filas siguen en pie sin identidad: el médico necesita el número, no el nombre.
+    citas_sin_identidad: int
+    citas_por_llegar: int
+    peticiones_sin_identidad: int
+    aviso: str

@@ -39,6 +39,11 @@ ORIGENES_CITA = (ORIGEN_PUBLICO, ORIGEN_PANEL)
 
 class Doctor(Base):
     __tablename__ = "doctors"
+    __table_args__ = (
+        # La banda de la regla de minimización: fuera de 6-12 el dato o se pierde antes de tiempo o
+        # se queda de más. La app normaliza el valor, esta trampa lo garantiza para un INSERT a mano.
+        CheckConstraint("retencion_meses >= 6 AND retencion_meses <= 12", name="ck_doctor_retencion"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
     nombre: Mapped[str] = mapped_column(Text, nullable=False)
@@ -46,6 +51,9 @@ class Doctor(Base):
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     telefono: Mapped[str | None] = mapped_column(Text)
     timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default="Europe/Madrid")
+    # Cuánto tarda en borrarse sola una cita cerrada. Defecto 12: se borra lo mínimo hasta que el
+    # médico diga lo contrario.
+    retencion_meses: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("12"))
     # slug_unico alimenta el enlace público tudominio.com/d/{slug}
     slug_unico: Mapped[str] = mapped_column(CITEXT, unique=True, nullable=False)
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

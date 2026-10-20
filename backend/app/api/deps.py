@@ -1,5 +1,6 @@
 """Dependencias de FastAPI: sesión de BD y doctor autenticado."""
 
+import hmac
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import Cookie, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Doctor
 from app.security import decodificar_token
@@ -35,6 +37,22 @@ async def get_proveedor_correo() -> Proveedor:
         return proveedor_desde_configuracion()
     except ValueError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+def comprobar_secreto_cron(cabecera: str | None, *, apagado: str) -> None:
+    """La puerta de las rutas internas: mismo secreto, mismo comportamiento en todas.
+
+    Está compartido porque las dos pasadas (recordatorios y limpieza) son iguales desde fuera: un
+    `curl` con una cabecera. Si el secreto no está configurado se responde 503 en vez de dejar la
+    ruta abierta --es una ruta que escribe y borra en la agenda de los médicos-- y la comparación es
+    `compare_digest` para que el tiempo que se tarda en rechazar no dependa de cuántos aciertos haya
+    por delante. En bytes, porque con caracteres fuera de ASCII `compare_digest` lanza TypeError.
+    """
+    secreto = (get_settings().cron_secret or "").strip()
+    if not secreto:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=apagado)
+    if not cabecera or not hmac.compare_digest(cabecera.encode(), secreto.encode()):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Secreto de cron incorrecto")
 
 
 def zona_del(doctor: Doctor) -> ZoneInfo:
