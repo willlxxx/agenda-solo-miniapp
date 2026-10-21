@@ -7,6 +7,15 @@ export type Doctor = {
 	slug_unico: string;
 };
 
+/** Lo que `PATCH /auth/yo` acepta. El `id` no se edita y el email/ enlace los valida el backend. */
+export type PerfilEdicion = {
+	nombre?: string;
+	email?: string;
+	telefono?: string | null;
+	timezone?: string;
+	slug_unico?: string;
+};
+
 export type Servicio = {
 	id: string;
 	nombre: string;

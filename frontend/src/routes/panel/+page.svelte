@@ -4,6 +4,7 @@
 	import Avisos from '#lib/panel/Avisos.svelte';
 	import Horario from '#lib/panel/Horario.svelte';
 	import ListaDeEspera from '#lib/panel/ListaDeEspera.svelte';
+	import MiConsulta from '#lib/panel/MiConsulta.svelte';
 	import Retencion from '#lib/panel/Retencion.svelte';
 	import Servicios from '#lib/panel/Servicios.svelte';
 	import { sesion } from '#lib/sesion.svelte';
@@ -89,6 +90,9 @@
 <Servicios />
 <Horario />
 <Retencion />
+<!-- Al final del panel a propósito: es la ficha que manda sobre el aviso y sobre la hora que se lee,
+     y se consulta una vez, no cada mañana. -->
+<MiConsulta />
 
 <style>
 	code {

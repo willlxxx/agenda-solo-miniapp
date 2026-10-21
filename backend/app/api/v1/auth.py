@@ -1,14 +1,15 @@
 """Autenticación del doctor + onboarding mágico (cero configuración inicial)."""
 
+import uuid
 from datetime import time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_doctor, get_session
 from app.models import Availability, Doctor, Service
-from app.schemas import AccesoIn, DoctorPublic, RegistroIn
+from app.schemas import AccesoIn, CambioContrasenaIn, DoctorPatch, DoctorPublic, RegistroIn
 from app.security import (
     clear_session_cookie,
     crear_token,
@@ -37,6 +38,19 @@ HORARIO_INICIAL = [
 
 async def _slug_o_email_en_uso(session: AsyncSession, email: str) -> bool:
     return (await session.scalar(select(Doctor.id).where(Doctor.email == email))) is not None
+
+
+async def _lo_tiene_otra_cuenta(
+    session: AsyncSession, columna: ColumnElement[str], valor: str, doctor_id: uuid.UUID
+) -> bool:
+    """Si ese email o ese enlace ya es de otro consultorio. El propio no cuenta.
+
+    El `Doctor.id != doctor_id` es lo que evita el 409 absurdo: `email` y `slug_unico` son CITEXT, así
+    que volver a guardar tu propio valor --o escribirlo con otras mayúsculas-- es un no-op, no una
+    colisión con uno mismo.
+    """
+    otro = await session.scalar(select(Doctor.id).where(columna == valor, Doctor.id != doctor_id))
+    return otro is not None
 
 
 @router.post("/registro", response_model=DoctorPublic, status_code=status.HTTP_201_CREATED)
@@ -96,3 +110,58 @@ async def salida(response: Response) -> None:
 @router.get("/yo", response_model=DoctorPublic)
 async def yo(doctor: Doctor = Depends(get_current_doctor)) -> Doctor:
     return doctor
+
+
+@router.patch("/yo", response_model=DoctorPublic)
+async def actualizar_yo(
+    datos: DoctorPatch,
+    doctor: Doctor = Depends(get_current_doctor),
+    session: AsyncSession = Depends(get_session),
+) -> Doctor:
+    """Editar la ficha del consultorio: nombre, contacto, huso y enlace público.
+
+    El huso es el campo delicado de la pantalla: decide la franja de silencio de los avisos y la hora
+    de pared a la que se lee cada cita, así que `DoctorPatch` lo valida contra la base IANA antes de
+    escribir. Las citas ya guardadas mantienen su instante exacto; cambiar el huso no las mueve en el
+    tiempo, solo cambia la hora con la que se pintan.
+
+    Cambiar el enlace no redirige al viejo: quien lo tenga apuntado se queda fuera hasta que le pases
+    el nuevo. Es reversible (se puede poner el anterior), pero conviene decirlo antes de pulsar.
+    """
+    cambios = datos.model_dump(exclude_unset=True)
+    if not cambios:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No llegó ningún campo")
+
+    if "email" in cambios and await _lo_tiene_otra_cuenta(session, Doctor.email, cambios["email"], doctor.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Ese email ya lo usa otra cuenta")
+
+    if "slug_unico" in cambios and await _lo_tiene_otra_cuenta(
+        session, Doctor.slug_unico, cambios["slug_unico"], doctor.id
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="Ese enlace ya lo usa otra consulta")
+
+    for campo, valor in cambios.items():
+        setattr(doctor, campo, valor)
+    await session.commit()
+    return doctor
+
+
+@router.post("/contrasena", status_code=status.HTTP_204_NO_CONTENT)
+async def cambiar_contrasena(
+    datos: CambioContrasenaIn,
+    doctor: Doctor = Depends(get_current_doctor),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Cambiar la clave con la sesión ya abierta, corroborando la anterior.
+
+    Pedirla aunque la cookie sea válida es para el portátil desatendido: que una sesión abierta no
+    bastase para tomar el control de la cuenta. El fallo es 403, no 401, porque la sesión sí es
+    correcta; lo que no cuadra es la confirmación.
+
+    Lo que este cambio NO hace: cerrar las demás sesiones. No hay lista de revocación, así que una
+    cookie firmada antes del cambio sigue entrando hasta que expire (`JWT_TTL_DIAS`).
+    """
+    if not verify_password(doctor.password_hash, datos.actual):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="La contraseña actual no es correcta")
+    doctor.password_hash = hash_password(datos.nueva)
+    await session.commit()

@@ -13,6 +13,7 @@ import type {
 	Franja,
 	ListaDeEsperaPublica,
 	ListaEspera,
+	PerfilEdicion,
 	ReservaAsistida,
 	Retencion,
 	Servicio,
@@ -47,7 +48,13 @@ async function request<T>(ruta: string, opciones: RequestInit = {}): Promise<T> 
 		try {
 			const cuerpo = await resp.json();
 			if (typeof cuerpo?.detail === 'string') detalle = cuerpo.detail;
-			else if (Array.isArray(cuerpo?.detail)) detalle = cuerpo.detail[0]?.msg ?? detalle;
+			// Un validador de campo devuelve un array, y su `msg` llega con el prefijo interno
+			// «Value error, ». Lo quitamos para que se lea nuestra frase --«Huso horario desconocido:
+			// ...»-- tanto en el panel como en el registro, que pasan por esta misma función.
+			else if (Array.isArray(cuerpo?.detail)) {
+				const primero = cuerpo.detail[0]?.msg;
+				if (typeof primero === 'string') detalle = primero.replace(/^Value error,\s*/, '');
+			}
 		} catch {
 			/* respuesta sin JSON: quedamos con el status */
 		}
@@ -64,6 +71,12 @@ export const api = {
 		request<Doctor>('/auth/acceso', json({ email, password })),
 	salida: () => request<void>('/auth/salida', { method: 'POST' }),
 	yo: () => request<Doctor>('/auth/yo'),
+	// La ficha del consultorio. Cambiar `timezone` corrige la franja en la que salen los avisos y la
+	// hora con la que se lee cada cita; cambiar `slug_unico` cambia el enlace que tienen tus pacientes.
+	actualizarYo: (datos: PerfilEdicion) =>
+		request<Doctor>('/auth/yo', { method: 'PATCH', body: JSON.stringify(datos) }),
+	cambiarContrasena: (actual: string, nueva: string) =>
+		request<void>('/auth/contrasena', json({ actual, nueva })),
 
 	servicios: () => request<Servicio[]>('/services'),
 	crearServicio: (datos: object) => request<Servicio>('/services', json(datos)),

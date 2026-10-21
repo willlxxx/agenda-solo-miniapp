@@ -1,5 +1,5 @@
 import { api, ErrorApi } from '#lib/api';
-import type { Doctor } from '#lib/types';
+import type { Doctor, PerfilEdicion } from '#lib/types';
 
 /** Estado de sesión del doctor en el navegador. La fuente de verdad sigue siendo la cookie HttpOnly. */
 class Sesion {
@@ -32,6 +32,12 @@ class Sesion {
 
 	async acceder(email: string, password: string): Promise<void> {
 		this.doctor = await api.acceso(email, password);
+	}
+
+	async actualizarPerfil(datos: PerfilEdicion): Promise<Doctor> {
+		// El servidor devuelve la ficha ya guardada: el enlace normalizado, el huso que quedó.
+		this.doctor = await api.actualizarYo(datos);
+		return this.doctor;
 	}
 
 	async salir(): Promise<void> {

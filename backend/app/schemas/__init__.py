@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.utils import normalizar_slug
+
 
 class DoctorPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -17,6 +19,19 @@ class DoctorPublic(BaseModel):
     telefono: str | None
     timezone: str
     slug_unico: str
+
+
+def huso_valido(valor: str) -> str:
+    """La regla de la zona horaria, escrita una sola vez: la comparten el registro y la ficha editada.
+
+    Es la misma comprobación que hace `app.api.deps.zona_del` al leer el valor guardado. Si aquí se
+    colara un huso fuera de la base IANA, el panel se caería con un 500 en la primera agenda del mes.
+    """
+    try:
+        ZoneInfo(valor)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(f"Huso horario desconocido: {valor}") from exc
+    return valor
 
 
 class RegistroIn(BaseModel):
@@ -30,16 +45,58 @@ class RegistroIn(BaseModel):
     @classmethod
     def _huso_real(cls, valor: str) -> str:
         """Si no existe en la base IANA, el motor de disponibilidad se caería en junio."""
-        try:
-            ZoneInfo(valor)
-        except (ZoneInfoNotFoundError, ValueError) as exc:
-            raise ValueError(f"Huso horario desconocido: {valor}") from exc
-        return valor
+        return huso_valido(valor)
 
 
 class AccesoIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
+
+
+class DoctorPatch(BaseModel):
+    """Lo que el consultorio puede cambiar de su ficha. Todo opcional: se guarda solo lo que llega.
+
+    `email` y `slug_unico` son únicos en la base, así que el endpoint comprueba si los tiene otra
+    cuenta y devuelve 409. Aquí no se resuelve con un sufijo como en el registro: un enlace que
+    nadie pidió, con un `-2` pegado, es un enlace que el médico no va a reconocer.
+    """
+
+    nombre: str | None = Field(default=None, min_length=2, max_length=120)
+    email: EmailStr | None = None
+    telefono: str | None = Field(default=None, max_length=40)
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    slug_unico: str | None = Field(default=None, min_length=1, max_length=60)
+
+    @field_validator("timezone")
+    @classmethod
+    def _huso_real(cls, valor: str | None) -> str | None:
+        return None if valor is None else huso_valido(valor)
+
+    @field_validator("slug_unico")
+    @classmethod
+    def _slug_normalizado(cls, valor: str | None) -> str | None:
+        """'Mi Consulta' -> 'mi-consulta': el enlace se guarda ya escrito como lo verá el paciente."""
+        if valor is None:
+            return None
+        normalizado = normalizar_slug(valor)
+        if normalizado == "doctor":
+            raise ValueError("El enlace necesita letras o números; con esos signos no se forma.")
+        return normalizado
+
+    @field_validator("nombre", "email", "timezone", "slug_unico")
+    @classmethod
+    def _unicos_y_esenciales_no_se_vacian(cls, valor: object) -> object:
+        """Mandarlos como `null` no es vaciarlos: esas columnas son NOT NULL y un 500 aquí sería culpa nuestra."""
+        if valor is None:
+            raise ValueError("Este campo no puede quedar vacío")
+        return valor
+
+
+class CambioContrasenaIn(BaseModel):
+    """Cambio de clave con la sesión ya abierta. La actual se sigue pidiendo: ver nota en el endpoint."""
+
+    actual: str = Field(min_length=1, max_length=128)
+    nueva: str = Field(min_length=8, max_length=128)
 
 
 class ServiceIn(BaseModel):
