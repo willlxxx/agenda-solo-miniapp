@@ -469,6 +469,48 @@ Está en `frontend/src/styles.css` (tokens, estados, animaciones), `frontend/src
 `Horario.svelte`, `Avisos.svelte`, `ListaDeEspera.svelte`, `Servicios.svelte`, `Retencion.svelte` y
 `routes/d/[slug]/+page.svelte`.
 
+## Mi consulta: la ficha del consultorio y su contraseña (Semana 2)
+
+El médico ya podía cambiar servicios, horario, vacaciones y retención, pero no su propia ficha. Si se
+registró desde el móvil con el huso por defecto no había forma de corregirlo, y el huso guardado decide
+dos cosas visibles: la franja 08:00–21:00 en la que el cron se calla y la hora con la que se lee cada
+cita de la agenda. Tampoco había forma de cambiar la contraseña sin escribir a nadie.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `PATCH /api/v1/auth/yo` | Cambia `nombre`, `email`, `telefono`, `timezone` y `slug_unico`. Todo opcional y se guarda solo lo que llega (`model_dump(exclude_unset=True)`); sin ningún campo → 400 «No llegó ningún campo». Email o enlace de otra cuenta → 409, **sin sufijos**: aquí no se aplica `slug_disponible()`, porque un enlace con `-2` que nadie pidió es un enlace que el médico no va a reconocer. |
+| `POST /api/v1/auth/contrasena` | `204`. Pide la actual aunque la cookie de sesión ya esté puesta: una sesión abierta no puede bastar para cambiar la clave. La actual mal → **403**, no 401, para no confundir «se murió tu sesión» con «falló la confirmación»; con un 401 el panel tendría que expulsar al médico a la pantalla de acceso. |
+
+Tres cosas que estos endpoints **no** hacen, dichas en el panel en lugar de escondidas:
+
+- **Cambiar el huso no reescribe las citas.** Los instantes guardados siguen siendo los mismos; lo que
+  cambia es la hora a la que se pintan. Recalcularlos en silencio movería citas de día a quien ya tiene
+  pacientes avisados, y esa no es una decisión que nadie pueda tomar por él.
+- **Cambiar el enlace no redirige el viejo.** `/d/<slug>` busca por el slug guardado, así que quien tenía
+  la dirección antigua en un marcador se encuentra con el 404. La tarjeta lo avisa antes de guardar.
+- **Cambiar la contraseña no cierra las demás sesiones.** No hay lista de revocación: un JWT firmado vale
+  hasta su caducidad aunque la clave haya cambiado. La tarjeta lo dice con esas palabras.
+
+La regla del huso está escrita una sola vez: `huso_valido()` (en `app/schemas/__init__.py`) consulta la
+base IANA y lo comparten `RegistroIn` y `DoctorPatch`. Es la misma comprobación que hace `zona_del()` al
+leer el dato guardado; si un huso inválido entrara por la ficha, el panel se caería con un 500 en la
+primera agenda del mes. Y como `email` y `slug_unico` son `CITEXT`, el 409 tiene que excluir al propio
+consultorio (`_lo_tiene_otra_cuenta`): volver a guardar tu email, o escribirlo con otras mayúsculas, es un
+no-op, no una colisión.
+
+En el panel, `frontend/src/lib/panel/MiConsulta.svelte` calcula el parche contra la ficha guardada —no
+contra lo que se fue tecleando—, deja el botón apagado hasta que hay cambio, y pinta lo que devolvió el
+servidor: si «Mi Consulta» se normalizó a `mi-consulta`, eso es lo que hay que ver y compartir. La zona
+horaria trae un `datalist` con 17 husos de aquí; es autocompletado, no lista cerrada, porque la regla la
+pone el backend.
+
+Verificado: 19 tests en `backend/tests/test_perfil.py` (campo a campo, colisiones cruzadas de email y de
+enlace, el huso nuevo llegando al payload de `/api/v1/appointments`, el enlace nuevo abriendo `/d/...`
+mientras el viejo da 404, y el hash que sigue siendo `$argon2id$` sin contener la clave). Suite completa:
+368 passed, 2 skipped. `svelte-check` 0 errores / 0 avisos. En vivo sobre una cuenta desechable: el 409
+«Ese enlace ya lo usa otra consulta» y el 422 «Huso horario desconocido: …» leídos en la pantalla sin que
+nada se guardara, y `POST /auth/acceso` `401` con la clave vieja / `200` con la nueva tras cambiarla.
+
 ## Publicar: la interfaz la sirve el propio FastAPI (Semana 2)
 
 `frontend/vite.config.ts` usa **`@sveltejs/adapter-static` con `fallback: 'index.html'`**, y el
@@ -690,7 +732,51 @@ Sobre la **Restart Policy** del servicio del cron: con un horario puesto, el pro
 dice —*Services with a cron schedule do not have a restart policy*—, así que no hay que cambiarla a
 `None` a mano; el proceso que termina bien no vuelve a arrancar.
 
-**7. Lo que queda apagado a propósito: la limpieza.** La decisión del primer despliegue es lanzar solo
+**7. El SMTP del doctor: lo único que hace que salga un correo.** Van seis variables en el **servicio web**
+(`Settings → Variables`), no en `cron-avisos`: quien abre la conexión SMTP es el proceso que despacho hace, y
+el cron solo llama por HTTP a la ruta interna.
+
+```
+RECORDATORIOS_PROVEEDOR=smtp
+SMTP_HOST=smtp.gmail.com          (o el que le dé su proveedor)
+SMTP_DE=consulta@su-dominio       <-- tiene que ser la cuenta autenticada
+SMTP_USUARIO=consulta@su-dominio
+SMTP_CONTRASENA=la contraseña de aplicación, marcada como Secret
+```
+
+`SMTP_PORT` ya vale 587 con STARTTLS, que es lo que usan Gmail, Zoho y la mayoría; solo se escribe
+`SMTP_PORT=465` junto con `SMTP_SSL=true`. Con `RECORDATORIOS_PROVEEDOR=smtp` y `SMTP_HOST` o `SMTP_DE`
+vacíos el despliegue **no se cae**: el guardia deja un `aviso de despliegue` en el log y cada envío falla, así
+que lo primero que se mira tras reiniciar es que ese aviso no esté. Y errar el host o la contraseña tampoco
+bloquea el arranque: los avisos suman `errores` y, si nada lo remedia, acaban en `agotados`.
+
+Los cinco datos se los da su propio correo, y hay dos escollos que no son del código. Con **Gmail** no vale la
+contraseña de la cuenta: hace falta activar la verificación en dos pasos y generar una *contraseña de
+aplicación* de 16 caracteres. Con **Outlook/Hotmail personales** la autenticación por contraseña ya no está
+habilitada por Microsoft, así que esa cuenta no sirve y conviene empujar hacia Gmail o Zoho. Y el `SMTP_DE`
+tiene que ser la misma dirección del `SMTP_USUARIO`, porque muchos proveedores rechazan un `From` distinto de
+la cuenta autenticada.
+
+Para comprobar que un correo sale de verdad hay dos trampas, y las dos se ven como «no funciona» sin serlo.
+**Una cita ya avisada no se reavisa**: si la bandera de 1 h está puesta (a aquí le pasó a la de las 03:01, con
+el simulado), cambiar a `smtp` no envía nada sobre esa cita; hay que reservar una nueva, a sí mismo con email,
+a unos 50 minutos (la ventana de 1 h pide entre 40 y 60, ni más ni menos). Y la **franja de silencio
+08:00–21:00 en el huso del consultorio** manda callar fuera de esa hora: una pasada de madrugada sale con
+`planificados: 0` con el SMTP perfecto. La pasada no hace falta esperarla: se fuerza desde cualquier máquina
+con el mismo guion del cron.
+
+```
+python scripts/cron.py recordatorios --url https://<dominio> --secreto <CRON_SECRET>
+```
+
+La prueba buena es esa línea con `"proveedor": "smtp"` y `enviados_1h: 1`, y el correo en la bandeja de
+entrada. Si falla, la bandera no se marca y `recordatorio_intentos` suma uno: hay **tres pasadas** (unos 45
+minutos con el horario de quince) para corregir credenciales antes de que esa cita se dé por perdida y
+aparezca en `agotados`. Si en vez del correo del doctor se monta un servicio de envíos (Brevo, Resend,
+Mailgun), el envío pasa a ser de un tercero y la declaración de terceros de la página pública —que hoy dice
+que la salida es del SMTP de cada doctor— deja de ser cierta: hay que reescribir ese aviso antes de dejarlo.
+
+**8. Lo que queda apagado a propósito: la limpieza.** La decisión del primer despliegue es lanzar solo
 los avisos; la ruta que borra el histórico viejo se deja fuera hasta ver las cuentas. Cuando toque, un
 tercer servicio igual que `cron-avisos` (mismo repo, mismo Dockerfile) pero con este orden de arranque en
 su Settings y un horario diario:
@@ -802,5 +888,11 @@ correo saliera. Lo que falta:
 - El aviso de retención de la página pública todavía dice que se puede pedir el archivo o el borrado,
   pero no cuantifica el plazo. En cuanto el cron de limpieza esté montado se puede añadir "y se borra
   solo a los X meses"; hasta entonces sería prometer un automático que no corre.
+- **Recuperar la contraseña**: con la sesión abierta ya se cambia desde «Mi consulta», pero quien la olvida
+  está fuera y no tiene por dónde volver. Para devolverle el acceso hacen falta dos cosas que aún no están:
+  una tabla de tokens de un solo uso con su migración, y el **SMTP real del doctor** —un enlace que no se
+  puede verificar entregado en el buzón de la consulta no es una recuperación, es una puerta abierta—.
+  Sin ese canal probado no hay forma honesta de prometerle que el correo le llega, así que se deja para
+  después del SMTP y no se simula en la cara pública.
 - Fase 2 del documento, todavía fuera: pagos, Google Calendar, integración con el software dental.
 
