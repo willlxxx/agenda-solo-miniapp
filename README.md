@@ -22,7 +22,9 @@ Plan completo: [`PLAN-SEMANA-1.md`](PLAN-SEMANA-1.md).
 backend/   FastAPI: app/{models,schemas,api/v1}, alembic/, tests/
 frontend/  SvelteKit: landing, /auth/registro, /auth/acceso, /panel; el build estático lo sirve la API
 scripts/   arranque.sh (migración + uvicorn, el mismo dentro del contenedor), cron.py (el disparador que
-           lanza el cron del host), salud.py (el sondeo del HEALTHCHECK, respeta PORT), postgres.ps1 (PG local)
+           lanza el cron del host), salud.py (el sondeo del HEALTHCHECK, respeta PORT), prueba-smtp.py (el
+           sondeo de correo antes de escribir las variables: sin dependencias y sin contraseña por argumento),
+           postgres.ps1 (PG local)
 Dockerfile docker-compose.yml   el despliegue: una imagen con API + interfaz, y su PostgreSQL
 railway.toml railway.cron.toml  referencia de la configuración de los dos servicios de Railway; el host
            no los lee en este proyecto (Config as Code obsoleto): se manda lo que dice el panel
@@ -805,6 +807,44 @@ habilitada por Microsoft, así que esa cuenta no sirve y conviene empujar hacia 
 tiene que ser la misma dirección del `SMTP_USUARIO`, porque muchos proveedores rechazan un `From` distinto de
 la cuenta autenticada.
 
+**Antes de escribirlo en el panel, se sondea desde el terminal con `scripts/prueba-smtp.py`** (27 pruebas en
+`test_prueba_smtp.py`, la misma forma que `salud.py`: se carga por ruta). Reproduce la
+secuencia de `Smtp._conectar` --EHLO, STARTTLS, login-- sin base de datos y sin depender de nada del repo,
+porque son solo `smtplib` y `getpass`. La contraseña la pide el propio terminal: no pasa por el historial de
+comandos, ni por un chat, ni se guarda en ningún sitio.
+
+```
+python scripts/prueba-smtp.py --host smtp.gmail.com --sin-login   # ¿responde y sube TLS?
+python scripts/prueba-smtp.py                                     # con las variables del .env, login incluido
+python scripts/prueba-smtp.py --para consulta@su-dominio          # entrega de verdad en su propio buzón
+```
+
+Sin `--para` no se manda ningún correo a nadie. Y el resumen final dice lo que se comprobó de verdad: tras
+`--sin-login` sale «Conexión verificada; las credenciales no se han probado», que es la frase que evita dar
+por bueno un login que nadie intentó. Cada fallo devuelve su arreglo en la última línea y sale 1: la contraseña
+de aplicación de Gmail, el 465 que va con `--puerto 465 --ssl`, el `From` distinto de la cuenta autenticada,
+el puerto bloqueado por la red, el host escrito mal.
+
+Verificado en vivo (2026-10-21, sin credenciales): `--host smtp.gmail.com --sin-login` imprime `smtp.gmail.com:587
+responde. Ofrece: 8bitmime, chunking, enhancedstatuscodes, pipelining, size, smtputf8, starttls`, después
+`· TLS negociado.` y sale 0; con `--puerto 465 --ssl` también sale 0. Contra `smtp.noexiste-ejemplo.test` sale
+1 con «El host no resuelve: mira el nombre (smtp.gmail.com, no gmail.com)». Lo que el sondeo no puede cubrir
+sin contraseña es el propio login, y ahí es donde el script vale más que esperar al log del cron.
+
+**`FRONTEND_ORIGIN`, que se escribe en el mismo sitio aunque no sea de SMTP.** El enlace de recuperación se
+construye con ese origen y se mete en un correo que el médico abre desde su teléfono, así que con el default
+`http://localhost:5173` el correo sale perfecto y el enlace apunta a la máquina de Railway: nadie puede abrirlo
+fuera de ahí. En este despliegue va el dominio público (`https://agenda-solo-miniapp-production.up.railway.app`).
+El arranque lo advierte sin bloquear: `RECORDATORIOS_PROVEEDOR=smtp con FRONTEND_ORIGIN='http://localhost:5173':
+los correos salen, pero los enlaces de recuperación apuntan a esta máquina...`.
+
+Dos consecuencias de guardar esto, para no enterarse después. La primera: las variables se leen al arrancar el
+proceso, así que hay que **Redeploy** después de guardar; sin redeploy el contenedor sigue con el entorno viejo
+aunque el panel muestre los valores nuevos. La segunda: con `RECORDATORIOS_PROVEEDOR=smtp` dejan de ser
+simulados los DOS canales que escriben, y el que avisa a los pacientes corre cada cuarto de hora sobre la base
+real. Si todavía no quiere que nadie reciba un correo, se deja `simulado` y se prueba primero la recuperación
+en local, donde el enlace sale por la consola.
+
 Para comprobar que un correo sale de verdad hay dos trampas, y las dos se ven como «no funciona» sin serlo.
 **Una cita ya avisada no se reavisa**: si la bandera de 1 h está puesta (a aquí le pasó a la de las 03:01, con
 el simulado), cambiar a `smtp` no envía nada sobre esa cita; hay que reservar una nueva, a sí mismo con email,
@@ -928,7 +968,9 @@ correo saliera. Lo que falta:
   ya hay al menos una consulta con una cita confirmada, que es la que el cron cuenta como `candidatas: 1`.
   Lo que sigue en mano del fundador es el **SMTP real del doctor**, que es lo único que hace que salga un
   correo de verdad: con `RECORDATORIOS_PROVEEDOR=smtp`, `SMTP_HOST`, `SMTP_DE`, `SMTP_USUARIO`,
-  `SMTP_CONTRASENA` y `SMTP_SSL` si procede, el despacho deja de ser simulado. La limpieza por cron sigue
+  `SMTP_CONTRASENA` y `SMTP_SSL` si procede, el despacho deja de ser simulado. Antes de escribir nada en el
+  panel, `python scripts/prueba-smtp.py` comprueba host, TLS y credenciales desde el terminal, y `FRONTEND_ORIGIN`
+  tiene que llevar el dominio público o los enlaces de recuperación salen muertos. La limpieza por cron sigue
   apagada a propósito hasta leer la primera pasada en `--simular`.
 - Panel: la mini-ficha de cada cita ya dice cuándo se recordó (y el export lo lleva por escrito). Lo
   que falta es la vista de conjunto: una columna con el estado de los avisos de toda la semana, para
