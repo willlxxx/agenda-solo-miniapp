@@ -50,6 +50,14 @@ export type DoctorResumen = {
 export type FichaPublica = {
 	doctor: DoctorResumen;
 	servicios: Servicio[];
+	/**
+	 * Si el despliegue puede o no mandar el recordatorio que se promete bajo el formulario. Lo dice el
+	 * backend porque depende de `RECORDATORIOS_PROVEEDOR`: con el canal simulado no sale ningún correo, y
+	 * prometer un aviso que no llega sería peor que no prometerlo.
+	 */
+	avisos_de_email: boolean;
+	/** `'smtp' | 'brevo' | 'simulado'`: quién manda el sobre, para poder nombrarlo delante del paciente. */
+	canal_de_avisos: string;
 };
 
 export type Hueco = {

@@ -1,7 +1,7 @@
 """Lo que se comprueba al arrancar, para que un despliegue público no se levante a medias.
 
 El criterio es uno solo: si el fallo hace que las sesiones se puedan falsificar, el proceso **no
-arranca**. Si lo que falta es una función opcional (el cron de avisos, el SMTP del doctor), se avisa
+arranca**. Si lo que falta es una función opcional (el cron de avisos, el canal de envíos), se avisa
 por el log y se levanta igual, porque el día uno un consultorio puede querer solo la agenda y ya
 tendrá los recordatorios el día dos.
 
@@ -13,6 +13,7 @@ import logging
 
 from app.config import SECRETO_DE_DESARROLLO, Settings, get_settings
 from app.domain.recuperacion import es_origen_local
+from app.services.correo import canal_elegido
 
 log = logging.getLogger("agenda.arranque")
 
@@ -78,21 +79,21 @@ def _avisos(s: Settings) -> list[str]:
             "CRON_SECRET vacío: /internal/recordatorios y /internal/limpieza responden 503. La agenda "
             "funciona, pero no sale ningún recordatorio y no se borra el histórico viejo."
         )
-    if s.recordatorios_proveedor == "smtp" and not (s.smtp_host and s.smtp_de):
+    try:
+        elegido, faltan = canal_elegido(s)
+    except ValueError as exc:
+        elegido, faltan = "simulado", []
+        avisos.append(f"{exc}: se usa el simulado, o sea que ningún correo sale realmente.")
+    if faltan:
         avisos.append(
-            "RECORDATORIOS_PROVEEDOR=smtp sin SMTP_HOST o SMTP_DE: cada envío va a fallar y el aviso "
+            f"RECORDATORIOS_PROVEEDOR={elegido} sin {', '.join(faltan)}: cada envío va a fallar y el aviso "
             "queda solo registrado en la base."
         )
-    if s.recordatorios_proveedor not in {"smtp", "simulado"}:
+    if elegido != "simulado" and es_origen_local(s.frontend_origin):
         avisos.append(
-            f"RECORDATORIOS_PROVEEDOR={s.recordatorios_proveedor!r} no es 'smtp' ni 'simulado': se "
-            "usa el simulado, o sea que ningún correo sale realmente."
-        )
-    if s.recordatorios_proveedor == "smtp" and es_origen_local(s.frontend_origin):
-        avisos.append(
-            f"RECORDATORIOS_PROVEEDOR=smtp con FRONTEND_ORIGIN={s.frontend_origin!r}: los correos salen, "
-            "pero los enlaces de recuperación apuntan a esta máquina y nadie puede abrirlos desde su "
-            "teléfono. En un despliegue público va el dominio real."
+            f"RECORDATORIOS_PROVEEDOR={s.recordatorios_proveedor} con FRONTEND_ORIGIN={s.frontend_origin!r}: "
+            "los correos salen, pero los enlaces de recuperación apuntan a esta máquina y nadie puede "
+            "abrirlos desde su teléfono. En un despliegue público va el dominio real."
         )
     return avisos
 

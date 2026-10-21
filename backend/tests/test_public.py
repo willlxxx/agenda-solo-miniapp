@@ -7,6 +7,9 @@ from zoneinfo import ZoneInfo
 import pytest
 from httpx import AsyncClient
 
+from app.api.deps import get_canal_correo
+from app.main import app
+from app.services.correo import Canal
 from tests.conftest import (
     DOCTOR_GARCIA,
     DOCTOR_LOPEZ,
@@ -67,6 +70,56 @@ async def test_ficha_sin_sesion_con_los_servicios_activos(client: AsyncClient, d
     # Minimización: el enlace público no enseña el email del doctor.
     assert "email" not in cuerpo["doctor"]
     await suelto.aclose()
+
+
+@pytest.fixture
+def con_canal():
+    """El canal de envíos del despliegue, puesto a mano y retirado al terminar.
+
+    La ficha lo pregunta a la misma dependencia que lee la recuperación, así que se puede probar la
+    promesa del recordatorio sin montar un SMTP ni una API key de nadie.
+    """
+    estado = {"canal": Canal(nombre="simulado", listo=False, origen_enlace="https://clinica.example")}
+
+    def poner(nombre: str, listo: bool) -> None:
+        estado["canal"] = Canal(nombre=nombre, listo=listo, origen_enlace="https://clinica.example")
+
+    app.dependency_overrides[get_canal_correo] = lambda: estado["canal"]
+    yield poner
+    app.dependency_overrides.pop(get_canal_correo, None)
+
+
+async def test_con_brevo_la_ficha_dice_que_el_aviso_sale_por_terceros(
+    client: AsyncClient, doctor: dict, con_canal
+):
+    con_canal("brevo", True)
+    cuerpo = (await client.get(f"/api/v1/public/{doctor['slug_unico']}")).json()
+    assert cuerpo["avisos_de_email"] is True
+    assert cuerpo["canal_de_avisos"] == "brevo"
+    # Y solo eso: ni el origen de los enlaces ni ninguna credencial viajan en la ficha pública.
+    assert "origen" not in str(cuerpo).lower()
+
+
+async def test_con_el_canal_apagado_la_ficha_no_promete_avisos(
+    client: AsyncClient, doctor: dict, con_canal
+):
+    """El caso del despliegue con `simulado`: la página no puede ofrecer un email que no va a llegar.
+
+    Es la lección del buzón vacío, pero del lado del paciente: el aviso bajo el formulario se escribe
+    con lo que el backend puede cumplir, no con lo que le gustaría cumplir.
+    """
+    con_canal("simulado", False)
+    cuerpo = (await client.get(f"/api/v1/public/{doctor['slug_unico']}")).json()
+    assert cuerpo["avisos_de_email"] is False
+    assert cuerpo["canal_de_avisos"] == "simulado"
+
+
+async def test_un_canal_a_medias_tampoco_da_la_cara(client: AsyncClient, doctor: dict, con_canal):
+    """`smtp` sin host: la respuesta sale igual (es un GET de lectura) y dice `avisos_de_email: false`."""
+    con_canal("smtp", False)
+    cuerpo = (await client.get(f"/api/v1/public/{doctor['slug_unico']}")).json()
+    assert cuerpo["avisos_de_email"] is False
+    assert cuerpo["canal_de_avisos"] == "smtp"
 
 
 async def test_ficha_de_un_slug_inexistente_es_404(client: AsyncClient):

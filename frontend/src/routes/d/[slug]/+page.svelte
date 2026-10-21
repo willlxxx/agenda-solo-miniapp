@@ -84,6 +84,17 @@
 		PREFERENCIAS.find((p) => p.valor === preferencia)?.texto ?? 'cualquier hora'
 	);
 
+	// RGPD: cuando el aviso sale de un servicio de envíos y no del buzón del médico, el tercero se nombra
+	// en la misma pantalla donde se promete el aviso. `smtp` es el correo de la consulta, así que no hay
+	// nada que declarar; un canal que aquí no esté escrito se declara como 'un servicio de envíos': menos
+	// preciso y sigue siendo verdad, que es el orden correcto delante de un paciente.
+	const SERVICIOS_DE_ENVIO: Record<string, string> = { brevo: 'Brevo' };
+	const terceros = $derived(
+		data.canal_de_avisos === 'smtp' || data.canal_de_avisos === 'simulado'
+			? null
+			: (SERVICIOS_DE_ENVIO[data.canal_de_avisos] ?? 'un servicio de envíos')
+	);
+
 	/** Tres verdades distintas: alta nueva, repetida y pendiente, repetida y ya avisada. */
 	const tituloLista = $derived.by(() => {
 		if (!listaHecha) return '';
@@ -464,19 +475,30 @@
 					<p class="error" role="alert"><Icon name="alerta" tamaño={15} clase="ico ico--accion ico--nota" />{error}</p>
 				{/if}
 			</form>
-			{#if correo}
-				<!-- El recordatorio es por email y solo si lo dejó: prometer un aviso que no puede
-					llegar sería peor que no prometerlo. -->
-				<p class="aviso aviso-recordatorio">
-					<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Te avisaremos a {correo} un día antes y otra vez una hora
-					antes de la cita. Es automático, y puedes pedir que deje de llegarte escribiendo a
-					{data.doctor.nombre}.
-				</p>
-			{:else}
-				<p class="aviso aviso-recordatorio">
-					<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Si nos dejas un email arriba, te avisamos un día antes y
-					una hora antes de la cita.
-				</p>
+			{#if data.avisos_de_email}
+				{#if correo}
+					<!-- El recordatorio es por email y solo si lo dejó: prometer un aviso que no puede
+						llegar sería peor que no prometerlo. -->
+					<p class="aviso aviso-recordatorio">
+						<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Te avisaremos a {correo} un día antes y otra vez una hora
+						antes de la cita. Es automático, y puedes pedir que deje de llegarte escribiendo a
+						{data.doctor.nombre}.
+					</p>
+				{:else}
+					<p class="aviso aviso-recordatorio">
+						<Icon name="campana" tamaño={15} clase="ico ico--accion ico--nota" />Si nos dejas un email arriba, te avisamos un día antes y
+						una hora antes de la cita.
+					</p>
+				{/if}
+				{#if terceros}
+					<!-- RGPD: cuando el sobre no sale del correo de la consulta, el tercero se declara
+						delante del paciente y no solo en el README. `avisos_de_email` ya garantiza que el
+						canal está montado, así que aquí no hay promesa que sostener: solo un nombre. -->
+					<p class="aviso aviso-tercero">
+						Los avisos los manda {terceros} por encargo de {data.doctor.nombre}; solo le llega tu
+						email y la hora de la cita.
+					</p>
+				{/if}
 			{/if}
 		{:else}
 			<h2><Icon name="check" tamaño={18} />Cita reservada</h2>
@@ -627,6 +649,14 @@
 		align-items: flex-start;
 		line-height: 1.4;
 		padding-left: 0.1rem;
+	}
+
+	/* La declaración del servicio de envíos va pegada a la promesa que declara, sangrada hasta donde
+	   empieza su texto: la campana de arriba y dos líneas sueltas de abajo son la misma idea. */
+	.aviso-recordatorio + .aviso-tercero {
+		margin-top: -0.45rem;
+		padding-left: 1.35rem;
+		line-height: 1.4;
 	}
 
 	.consentimiento {

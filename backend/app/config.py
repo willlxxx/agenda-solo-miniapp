@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     smtp_contrasena: str | None = None
     smtp_de: str | None = None
     smtp_ssl: bool = False
+    # Brevo (antes Sendinblue) por su API HTTPS. Existe porque el egress de SMTP está cortado fuera del
+    # plan Pro de Railway: con `smtp` la conexión al proveedor muere en `[Errno 101] Network is
+    # unreachable` dentro del contenedor, y el 443 sí sale. Son tres variables, y la clave va marcada
+    # como Secret.
+    brevo_api_key: str | None = None
+    brevo_de: str | None = None
+    brevo_nombre: str | None = None
     # Lo que manda el cron externo en la cabecera x-cron-secret. Sin valor, el endpoint está apagado.
     cron_secret: str | None = None
 

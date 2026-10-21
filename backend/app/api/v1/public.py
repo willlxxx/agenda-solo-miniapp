@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_session, zona_del
+from app.api.deps import get_canal_correo, get_session, zona_del
 from app.domain.disponibilidad import calcular_disponibilidad
 from app.models import ORIGEN_PUBLICO, UNIQUE_EN_ESPERA, Doctor, Patient, Service, Waitlist
 from app.schemas import (
@@ -29,6 +29,7 @@ from app.schemas import (
     ListaDeEsperaPublica,
     ServicePublic,
 )
+from app.services.correo import Canal
 from app.services.reserva import (
     ANTICIPACION_MINUTOS,
     HUECOS_POR_DIA,
@@ -62,15 +63,29 @@ async def _servicio_del_doctor(session: AsyncSession, doctor: Doctor, servicio_i
 
 
 @router.get("/{slug}", response_model=FichaPublica)
-async def ficha(slug: str, session: AsyncSession = Depends(get_session)) -> dict:
-    """Lo que necesita la página para pintar cabecera y elegir servicio."""
+async def ficha(
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+    canal: Canal = Depends(get_canal_correo),
+) -> dict:
+    """Lo que necesita la página para pintar cabecera y elegir servicio.
+
+    El canal va en la misma ficha porque es el que sostiene el aviso que se lee bajo el formulario: si el
+    despliegue no puede mandar correo, la página no puede prometer un recordatorio por email. Y si el envío
+    sale de una API de terceros, el paciente tiene que poder leer quién se lo manda.
+    """
     doctor = await _doctor_por_slug(session, slug)
     filas = await session.scalars(
         select(Service)
         .where(Service.doctor_id == doctor.id, Service.activo.is_(True))
         .order_by(Service.orden, Service.nombre)
     )
-    return {"doctor": doctor, "servicios": list(filas)}
+    return {
+        "doctor": doctor,
+        "servicios": list(filas),
+        "avisos_de_email": canal.listo,
+        "canal_de_avisos": canal.nombre,
+    }
 
 
 @router.get("/{slug}/disponibilidad", response_model=DisponibilidadPublic)

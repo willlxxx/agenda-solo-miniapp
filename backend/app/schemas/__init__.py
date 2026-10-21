@@ -213,6 +213,13 @@ class FichaPublica(BaseModel):
     doctor: DoctorResumen
     servicios: list[ServicePublic]
 
+    # Las dos vienen del despliegue, no de la interfaz. `avisos_de_email` es la promesa que puede o no
+    # estar detrás del aviso que lee el paciente bajo el formulario, y quién lo manda decide qué hay que
+    # declarar (RGPD): no es lo mismo escribir "te avisamos nosotros" si el envío sale del SMTP de la
+    # consulta que si sale de una API de envíos de terceros.
+    avisos_de_email: bool
+    canal_de_avisos: str
+
 
 class HuecoPublic(BaseModel):
     inicio: time

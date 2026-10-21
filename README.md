@@ -112,7 +112,7 @@ Lectura pública para el enlace del doctor, sin sesión y sin escribir nada:
 
 | Endpoint | Qué devuelve |
 | --- | --- |
-| `GET /api/v1/public/{slug}` | Nombre y huso del doctor + servicios **activos** (sin email ni teléfono). |
+| `GET /api/v1/public/{slug}` | Nombre y huso del doctor + servicios **activos** (sin email ni teléfono), y `avisos_de_email`/`canal_de_avisos`: si el despliegue puede mandar el recordatorio y quién lo manda. |
 | `GET /api/v1/public/{slug}/disponibilidad?servicio=&dias=14&paso=15&anticipacion=30&desde=` | Huecos por día, en hora local del doctor. |
 | `POST /api/v1/public/{slug}/citas` | Reserva real: `pg_advisory_xact_lock` por doctor + revalidación del hueco dentro de la tx. |
 
@@ -280,18 +280,28 @@ Reglas:
 - **Sin email no hay recordatorio.** El campo es opcional en la página pública, y el canal es correo:
   una cita sin dirección aparece como `sin_correo` y no se intenta escribir a ningún sitio.
 
-Declaración de terceros (GDPR): el envío sale del **SMTP que configure cada doctor**
-(`SMTP_HOST`/`SMTP_DE` en `backend/.env`), no de un servicio de mensajería de terceros. La página
-pública declara la finalidad en la casilla de consentimiento ("que use el email que escriba solo para
-recordármela") y bajo el formulario dice exactamente qué se va a mandar y a qué dirección; borrar la
-ficha del paciente borra el email, y por tanto el recordatorio. Retención: 6–12 meses como el resto
-de la agenda.
+Declaración de terceros (GDPR): la página pública dice **quién manda el sobre**, porque eso lo decide el
+despliegue y no la interfaz. El aviso bajo el formulario se lee de `GET /api/v1/public/{slug}`, que lleva
+`avisos_de_email` (si el canal puede salir) y `canal_de_avisos` (`smtp`, `brevo` o `simulado`): con `smtp` el
+envío sale del correo que configuró cada doctor y no hay tercero que nombrar; con un servicio de envíos la
+página añade una línea que lo nombra y dice que solo recibe el email y la hora. Con `simulado` no se promete
+ningún aviso, porque no sale ninguno. La casilla de consentimiento sigue declarando la finalidad («que use el
+email que escriba solo para recordármela»); borrar la ficha del paciente borra el email, y por tanto el
+recordatorio. Retención: 6–12 meses como el resto de la agenda.
+
+El motivo por el que existe un segundo canal es un hecho del host, no un capricho: **Railway solo permite
+conectar a los puertos de SMTP (25/465/587) desde el plan Pro**, así que un despliegue en plan inferior con
+`RECORDATORIOS_PROVEEDOR=smtp` falla en el primer `connect()` con `[Errno 101] Network is unreachable` y ningún
+correo sale. El 443 de una API de envíos sí está disponible en cualquier plan, y por eso `app/services/correo.py`
+tiene `Brevo`, que llama a `POST https://api.brevo.com/v3/smtp/email` con `httpx` y la clave en `x-api-key`.
 
 Está en `app/domain/recordatorios.py` (decidir y redactar, sin BD ni SMTP), `app/services/despacho.py`
-(leer, candar, entregar, marcar) y `app/services/correo.py` (`Simulado` y `Smtp` con la librería
-estándar dentro de un hilo). Se prueba en `tests/test_recordatorios.py`, con fechas y reloj fijos:
-corra el CI a la hora que corra, la pasada de las 04:00 de la madrugada se sigue comprobando a las
-04:00.
+(leer, candar, entregar, marcar) y `app/services/correo.py` (`Simulado`, `Smtp` con la librería estándar
+dentro de un hilo y `Brevo` con `httpx` sobre HTTPS; los tres se eligen por `RECORDATORIOS_PROVEEDOR`). Se
+prueba en `tests/test_recordatorios.py`, con fechas y reloj fijos: corra el CI a la hora que corra, la pasada
+de las 04:00 de la madrugada se sigue comprobando a las 04:00. Lo que sale a la red se prueba aparte:
+`tests/test_brevo.py` (39 pruebas, con `httpx.MockTransport`, sin cuenta de nadie) y
+`tests/test_prueba_smtp.py` para el sondeo de SMTP.
 
 ## Suprimir y exportar los datos de un paciente (Semana 2)
 
@@ -542,7 +552,13 @@ Reglas, y por qué son así:
 - **Sin canal real, no se ofrece.** Con `RECORDATORIOS_PROVEEDOR=simulado` y `ENTORNO=produccion` el endpoint
   devuelve `503` con la salida que sí existe (cambiar la clave desde un aparato donde siga abierto). En
   desarrollo sí se recorre el flujo y el enlace se imprime en el log, que es como se probó sin credenciales
-  de nadie.
+  de nadie. Con `brevo` y sus dos variables se ofrece igual que con `smtp`: `canal_desde_configuracion`, el
+  constructor del proveedor y el guardia de arranque preguntan las tres a `canal_elegido`, así que no pueden
+  volver a contradecirse —que es el fallo que dejó un `202` prometido y un buzón vacío.
+- **Y `disponible: true` solo prueba la configuración, no la red.** Lo que dice es que el canal elegido tiene
+  sus variables puestas. El SMTP de Railway cortado, un firewall o un remitente sin verificar siguen dando
+  `true` y ningún correo sale: la única prueba de que un aviso llega es verlo en un buzón, y si no llegó, leer
+  `password_resets.error_envio`, que lleva el motivo del proveedor escrito.
 - **Cambiar la clave no cierra las demás sesiones.** No hay lista de revocación: una cookie firmada antes
   sigue entrando hasta que caduque (`JWT_TTL_DIAS`). La pantalla lo dice en vez de dejarlo implícito, y la
   única mitigación real es `Salir` desde ese aparato. Está apuntado como siguiente paso cerrar sesiones con
@@ -551,14 +567,26 @@ Reglas, y por qué son así:
 Verificado: 24 pruebas en `tests/test_recuperacion.py` contra `agenda_test` (el hash guardado y el token en
 claro ausente, las respuestas idénticas con y sin cuenta, el cooldown de 60 s, caducidad, reuso `400`,
 hermanos borrados, `error_envio` tras un fallo de entrega, el `503` sin canal y el `simulado_en_desarrollo`).
-Suite completa: 392 passed, 2 skipped. Ruff limpio, `svelte-check` 0 errores / 0 avisos y `npm run build`
+Suite completa: 461 passed, 2 skipped. Ruff limpio, `svelte-check` 0 errores / 0 avisos y `npm run build`
 ok. En vivo, con la API sirviendo la interfaz en `127.0.0.1:8000` y canal simulado: desde la pantalla de
 acceso se abre la tarjeta de recuperación —que enseña el aviso honesto del canal simulado—, se pide el
 enlace, sale por la consola con su `#token=`, se abre en el navegador, se pone la clave nueva y se entra con
 ella (`200`) mientras la vieja da `401`; reusar el enlace da `400` y un email sin cuenta da el mismo `202`.
 La cuenta con la que se probó se creó y se borró por su `id`, y `password_resets` quedó a cero filas. Lo que
-**no** está probado sigue siendo la entrega real: hasta que el SMTP del consultorio esté puesto, en
-producción no hay correo que salga y la pantalla lo dice.
+**no** está probado sigue siendo la entrega real: hasta que el canal de salida esté puesto, en producción no
+hay correo que salga y la pantalla lo dice.
+
+El canal `brevo` y la declaración pública se verificaron aparte, con credenciales de mentira y sin abrir el
+buzón de nadie: levantada la API en `127.0.0.1:8010` con `RECORDATORIOS_PROVEEDOR=brevo`, `BREVO_API_KEY` y
+`BREVO_DE` de relleno, `GET /api/v1/public/dra-agenda-viva` devuelve `avisos_de_email: true` y
+`canal_de_avisos: "brevo"` (y nada de `origen_enlace`, que no viaja al navegador), y la página del paciente,
+recorrida hasta el paso de datos, muestra bajo el formulario las dos líneas: la promesa del aviso con la
+dirección escrita y «Los avisos los manda Brevo por encargo de Dra. Agenda Viva; solo le llega tu email y la
+hora de la cita». Con el email vacío la promesa cambia de redacción y la declaración se mantiene. Que con
+`simulado` no aparezca ninguna de las dos lo afirman las pruebas (`test_public.py`: la ficha trae
+`avisos_de_email: false`), no una pasada en el navegador. La entrega contra
+la API real de Brevo **no** está probada: hacen falta la cuenta, el remitente verificado y la clave, y eso es
+lo único que falta por parte del fundador.
 
 ## Publicar: la interfaz la sirve el propio FastAPI (Semana 2)
 
@@ -658,7 +686,10 @@ No arranca con: el `JWT_SECRET` del repo **o el de `.env.example`** (copiar el e
 `DATABASE_URL` que no sea PostgreSQL (con SQLite la agenda va en local y dos reservas simultáneas se
 pisan, porque no hay advisory lock), o un `ENTORNO` mal escrito —`production`, vacío—, porque un typo
 no puede significar «me quedé sin comprobaciones». Son **avisos** por el log, no fallos: `CRON_SECRET`
-vacío (las dos rutas internas responden 503) y `RECORDATORIOS_PROVEEDOR=smtp` a medias. Con ese
+vacío (las dos rutas internas responden 503), el canal de envíos a medias (`smtp` sin `SMTP_HOST`/`SMTP_DE`
+o `brevo` sin `BREVO_API_KEY`/`BREVO_DE`: cada envío va a fallar), un proveedor inventado (se usa el simulado
+y ningún correo sale) y un canal real con `FRONTEND_ORIGIN` local (los correos salen con enlaces que nadie
+puede abrir desde su teléfono). Con ese
 entorno la cookie de sesión sale con `Secure`, y eso ya no depende del string de `FRONTEND_ORIGIN`.
 
 ```bash
@@ -691,10 +722,14 @@ primer arranque, en este orden: `/healthz` da 200, `/panel` devuelve HTML, `/api
 consulta en `/auth/registro`, pegar el enlace en el móvil, pasar una cita de prueba y borrarla desde el
 panel. En Railway, que es el host elegido, esos pasos están concretos abajo.
 
-**El correo** es lo último, porque es lo único que escribe fuera: `RECORDATORIOS_PROVEEDOR=smtp`,
-`SMTP_HOST`, `SMTP_DE` (muchos proveedores rechazan un `From` que no es la cuenta autenticada),
-`SMTP_USUARIO`/`SMTP_CONTRASENA` y `SMTP_SSL=true` solo con el 465. Hasta entonces el simulado guarda
-en la base lo que habría mandado, y la página pública no promete nada que no esté pasando.
+**El correo** es lo último, porque es lo único que escribe fuera, y el canal lo elige
+`RECORDATORIOS_PROVEEDOR`. Con `smtp` hacen falta `SMTP_HOST`, `SMTP_DE` (muchos proveedores rechazan un
+`From` que no es la cuenta autenticada), `SMTP_USUARIO`/`SMTP_CONTRASENA` y `SMTP_SSL=true` solo con el
+465. Con `brevo` hacen falta `BREVO_API_KEY` y `BREVO_DE`, y es la ruta que funciona en Railway por
+debajo del plan Pro: el saco de los avisos está detrás de HTTPS por el 443, no de SMTP por el 587, que en
+ese plan está cortado y se devuelve solo como `[Errno 101] Network is unreachable`. `BREVO_NOMBRE` es
+opcional y vale el nombre de la consulta. Hasta elegir canal, el simulado guarda en la base lo que habría
+mandado, y la página pública no promete nada que no esté pasando.
 
 ## Railway: los clics, los dos servicios y las variables
 
@@ -732,7 +767,7 @@ que entrega el host vale tal cual»). La primera vez que se despliegue conviene 
 ENTORNO=produccion
 JWT_SECRET            el token_urlsafe(32), como secreto
 CRON_SECRET           el token_urlsafe(24), como secreto
-RECORDATORIOS_PROVEEDOR=simulado        hasta tener el SMTP del doctor
+RECORDATORIOS_PROVEEDOR=simulado        hasta tener canal de salida
 FRONTEND_ORIGIN=https://<dominio>
 DATABASE_URL          (la pone Railway sola)
 ```
@@ -781,10 +816,14 @@ Sobre la **Restart Policy** del servicio del cron: con un horario puesto, el pro
 dice —*Services with a cron schedule do not have a restart policy*—, así que no hay que cambiarla a
 `None` a mano; el proceso que termina bien no vuelve a arrancar.
 
-**7. El SMTP del doctor: lo único que hace que salga un correo.** Se escriben cinco en el **servicio web**
-(`Settings → Variables`), no en `cron-avisos`: quien abre la conexión SMTP es el proceso que despacho hace, y
-el cron solo llama por HTTP a la ruta interna. Son siete si se cuentan las dos que llevan default
-(`SMTP_PORT=587` y `SMTP_SSL=false`), y siete menos una si el proveedor autentica sin usuario.
+**7. El canal de salida: lo único que hace que salga un correo.** Hay dos, y se eligen con
+`RECORDATORIOS_PROVEEDOR`. `smtp` es el buzón del doctor; `brevo` es la API HTTPS de un servicio de envíos y
+existe porque **el egress de SMTP de Railway está apagado fuera del plan Pro**. Las variables se escriben en el
+**servicio web** (`Settings → Variables`), no en `cron-avisos`: quien abre la conexión es el proceso que
+despacha, y el cron solo llama por HTTP a la ruta interna.
+
+Con `smtp` son cinco (siete si se cuentan las dos que llevan default, `SMTP_PORT=587` y `SMTP_SSL=false`, y
+siete menos una si el proveedor autentica sin usuario):
 
 ```
 RECORDATORIOS_PROVEEDOR=smtp
@@ -806,6 +845,33 @@ aplicación* de 16 caracteres. Con **Outlook/Hotmail personales** la autenticaci
 habilitada por Microsoft, así que esa cuenta no sirve y conviene empujar hacia Gmail o Zoho. Y el `SMTP_DE`
 tiene que ser la misma dirección del `SMTP_USUARIO`, porque muchos proveedores rechazan un `From` distinto de
 la cuenta autenticada.
+
+**Con `brevo` bastan dos variables además del proveedor**, y es el camino que queda en Railway sin subir de
+plan: el envío sale por HTTPS al 443, que ningún plan corta.
+
+```
+RECORDATORIOS_PROVEEDOR=brevo
+BREVO_API_KEY=la «Account API key» de Brevo, marcada como Secret
+BREVO_DE=consulta@su-dominio        <-- tiene que estar VERIFICADA en Brevo
+BREVO_NOMBRE=Consulta Dental X      (opcional: sin valor se usa BREVO_DE)
+```
+
+La clave se genera en Brevo → *Settings → API & SMTP → Account API key*, y el remitente se verifica en
+*Senders, Domains & Dedicated IPs*: con una cuenta de Gmail se verifica la dirección sin tener dominio propio,
+que es el caso de un consultorio que empieza. Las `SMTP_*` que quedarán puestas del intento anterior se
+ignoran: a quién pregunta el canal lo decide `canal_elegido`, y solo mira las variables del canal elegido.
+
+Aquí no hace falta un sondeo aparte como `prueba-smtp.py`: la respuesta de Brevo llega escrita a
+`password_resets.error_envio` y al contador `errores` de la pasada, porque el texto del proveedor se mete en el
+`ErrorEnvio` en vez de quedarse en un `HTTP 400` pelado. Los dos motivos que se van a ver son esos dos, y los
+dos se arreglan en el panel de Brevo, no en el código: `400` con «sender email is not valid» es el remitente sin
+verificar, y `401` con «Invalid API key» es la clave.
+
+Y montar un tercero tiene un efecto en la cara pública, no solo en el envío: la ficha de
+`GET /api/v1/public/{slug}`
+lleva `canal_de_avisos` y `avisos_de_email`, y con `brevo` la página del paciente añade bajo el formulario la
+línea que nombra a Brevo como el que manda los avisos. Eso es la declaración de terceros del apartado anterior
+cumpliéndose sola; no hay que reescribir ningún texto al cambiar de canal.
 
 **Antes de escribirlo en el panel, se sondea desde el terminal con `scripts/prueba-smtp.py`** (27 pruebas en
 `test_prueba_smtp.py`, la misma forma que `salud.py`: se carga por ruta). Reproduce la
@@ -857,12 +923,12 @@ con el mismo guion del cron.
 python scripts/cron.py recordatorios --url https://<dominio> --secreto <CRON_SECRET>
 ```
 
-La prueba buena es esa línea con `"proveedor": "smtp"` y `enviados_1h: 1`, y el correo en la bandeja de
-entrada. Si falla, la bandera no se marca y `recordatorio_intentos` suma uno: hay **tres pasadas** (unos 45
-minutos con el horario de quince) para corregir credenciales antes de que esa cita se dé por perdida y
-aparezca en `agotados`. Si en vez del correo del doctor se monta un servicio de envíos (Brevo, Resend,
-Mailgun), el envío pasa a ser de un tercero y la declaración de terceros de la página pública —que hoy dice
-que la salida es del SMTP de cada doctor— deja de ser cierta: hay que reescribir ese aviso antes de dejarlo.
+La prueba buena es esa línea con `"proveedor": "smtp"` (o `"brevo"`, que es el que toca en Railway sin plan
+Pro) y `enviados_1h: 1`, y el correo en la bandeja de entrada. Si falla, la bandera no se marca y
+`recordatorio_intentos` suma uno: hay **tres pasadas** (unos 45 minutos con el horario de quince) para corregir
+credenciales antes de que esa cita se dé por perdida y aparezca en `agotados`. La declaración de terceros de la
+página pública ya no depende de que alguien se acuerde de reescribirla al cambiar de canal: la ficha pública
+lleva `canal_de_avisos`, y con un servicio de envíos la página nombra al tercero ella sola.
 
 **8. Lo que queda apagado a propósito: la limpieza.** La decisión del primer despliegue es lanzar solo
 los avisos; la ruta que borra el histórico viejo se deja fuera hasta ver las cuentas. Cuando toque, un
@@ -949,7 +1015,8 @@ El lado de la API lo confirma por su cuenta: en su log se lee `152.55.185.210…
 
 **Lo que sigue sin probar**, para que tampoco cuente: que un correo llegue a un paciente de verdad —con
 `RECORDATORIOS_PROVEEDOR=simulado`, que es como está a propósito, el aviso se registra en la base y no sale—,
-el SMTP real del doctor, un dominio propio en lugar del
+**un canal de salida real** (`smtp` está montado y cortado por el plan; `brevo` está hecho y sin probar contra
+la API de Brevo), un dominio propio en lugar del
 `*.up.railway.app`, la ruta de limpieza —que sigue apagada a propósito— y el coste del plan con los dos
 servicios. Faltan dos comprobaciones que solo se ven con la agenda por delante: en el log del cron, una pasada
 con `enviados_24h: 1` —la ventana de 1 h ya dio su `enviados_1h: 1`, así que se sabe exactamente qué buscar—, y
@@ -966,10 +1033,14 @@ correo saliera. Lo que falta:
 - **Publicado está**: el host (Railway), la imagen construida por el host, la base del host migrada, el
   healthcheck y el cron de avisos cada quince minutos, todo ello visto en los logs de arriba. En esa base
   ya hay al menos una consulta con una cita confirmada, que es la que el cron cuenta como `candidatas: 1`.
-  Lo que sigue en mano del fundador es el **SMTP real del doctor**, que es lo único que hace que salga un
-  correo de verdad: con `RECORDATORIOS_PROVEEDOR=smtp`, `SMTP_HOST`, `SMTP_DE`, `SMTP_USUARIO`,
-  `SMTP_CONTRASENA` y `SMTP_SSL` si procede, el despacho deja de ser simulado. Antes de escribir nada en el
-  panel, `python scripts/prueba-smtp.py` comprueba host, TLS y credenciales desde el terminal, y `FRONTEND_ORIGIN`
+  Lo que sigue en mano del fundador es **el canal de salida**, que hoy es `simulado` y por eso no ha llegado
+  un correo a nadie. Con `smtp` no se puede: el egress de SMTP de Railway está apagado fuera del plan Pro y el
+  contenedor muere en el primer `connect()` con `[Errno 101] Network is unreachable`, que es exactamente lo
+  que se leyó en `password_resets.error_envio` cuando el enlace de recuperación no llegó al buzón. Lo montado
+  es `brevo`, la API HTTPS por el 443: `RECORDATORIOS_PROVEEDOR=brevo`, `BREVO_API_KEY` (Secret), `BREVO_DE`
+  con el remitente ya verificado en Brevo y `BREVO_NOMBRE` si se quiere un nombre en el "De:". Antes de
+  escribir nada en el panel, `python scripts/prueba-smtp.py` sigue sirviendo para la ruta SMTP, y para la de
+  Brevo la comprobación es la respuesta del propio proveedor, que ya se guarda en la base. `FRONTEND_ORIGIN`
   tiene que llevar el dominio público o los enlaces de recuperación salen muertos. La limpieza por cron sigue
   apagada a propósito hasta leer la primera pasada en `--simular`.
 - Panel: la mini-ficha de cada cita ya dice cuándo se recordó (y el export lo lleva por escrito). Lo
@@ -980,9 +1051,10 @@ correo saliera. Lo que falta:
   solo a los X meses"; hasta entonces sería prometer un automático que no corre.
 - **Recuperar la contraseña: el camino está, falta el buzón.** La tabla de tokens de un solo uso (`0006`),
   los tres endpoints y las dos pantallas están hechos y verificados en local con el canal simulado, y en
-  producción la cara pública se niega (`503`) antes que prometer un correo que no sale. Lo que falta es el
-  **SMTP real del doctor**: con `RECORDATORIOS_PROVEEDOR=smtp` y sus variables puestas, comprobar la
-  recuperación exige ver el enlace en un buzón de verdad, no leer el `202`.
+  producción la cara pública se niega (`503`) antes que prometer un correo que no sale. Lo que faltó fue el
+  canal: se pidió el enlace, la API contestó `202`, y el `error_envio` de la fila dijo `[Errno 101] Network is
+  unreachable` —el SMTP cortado por el plan, no la cuenta ni el código. Con `brevo` montado, comprobar la
+  recuperación sigue exigiendo ver el enlace en un buzón de verdad, no leer el `202`.
 - Cerrar las sesiones que quedan abiertas cuando la clave cambia (a mano o por recuperación). Hoy no hay
   lista de revocación y la pantalla lo dice; la propuesta es un `sesiones_desde` por consultorio comparado
   con el `iat` de la cookie, y todavía no está aprobada.
