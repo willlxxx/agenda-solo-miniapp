@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Doctor
 from app.security import decodificar_token
-from app.services.correo import Proveedor, proveedor_desde_configuracion
+from app.services.correo import Canal, Proveedor, canal_desde_configuracion, proveedor_desde_configuracion
 
 
 async def get_ahora() -> datetime:
@@ -37,6 +37,16 @@ async def get_proveedor_correo() -> Proveedor:
         return proveedor_desde_configuracion()
     except ValueError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
+async def get_canal_correo() -> Canal:
+    """El canal dicho sin conectar y sin fallar: es lo que lee la pantalla de acceso.
+
+    Hace falta una dependencia aparte porque `get_proveedor_correo` construye el proveedor real, y eso
+    en un despliegue con `smtp` a medias lanza. La recuperación quiere preguntar "¿puedo ofrecerte esto?"
+    antes de que nadie pulse el botón, y esa pregunta no debe abrir un socket ni devolver un 503.
+    """
+    return canal_desde_configuracion()
 
 
 def comprobar_secreto_cron(cabecera: str | None, *, apagado: str) -> None:

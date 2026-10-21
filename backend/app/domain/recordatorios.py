@@ -10,8 +10,8 @@ Reglas, y por qué son así:
 - **Ventana, no instante.** Un cron que se salta un tick no debe perder el aviso, y uno que estuvo
   caído tres días no debe mandar un "mañana tienes cita" sobre una cita ya pasada. Cada recordatorio
   vale mientras el adelanto esté dentro de su ventana: 24 h -> [12 h, 24 h], 1 h -> [40 min, 60 min].
-- **Horas de silencio 08:00-21:00 en el huso del doctor.** Un recordatorio a las 03:00 es una queja
-  segura. Si la ventana entera cae de madrugada (cita a las 21:30 con el aviso de 1 h fuera de
+- **Escribe solo entre 08:00 y 21:00 en el huso del doctor; fuera, silencio.** Un recordatorio a las 03:00
+  es una queja segura. Si la ventana entera cae de madrugada (cita a las 21:30 con el aviso de 1 h fuera de
   horario), ese aviso simplemente no sale: mejor uno menos que uno molesto.
 - **Nada que no podamos cumplir.** El texto ofrece llamar al médico si hay teléfono guardado; sin
   teléfono dice "avísanos" y punto. No hay enlace de anular ni botón de confirmar: eso sería prometer

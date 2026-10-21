@@ -1,15 +1,33 @@
 """Autenticación del doctor + onboarding mágico (cero configuración inicial)."""
 
 import uuid
-from datetime import time
+from datetime import datetime, time
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_doctor, get_session
+from app.api.deps import (
+    get_ahora,
+    get_canal_correo,
+    get_current_doctor,
+    get_proveedor_correo,
+    get_session,
+)
+from app.config import get_settings
+from app.domain.recuperacion import disponible_recuperacion
 from app.models import Availability, Doctor, Service
-from app.schemas import AccesoIn, CambioContrasenaIn, DoctorPatch, DoctorPublic, RegistroIn
+from app.schemas import (
+    AccesoIn,
+    CambioContrasenaIn,
+    DisponibilidadRecuperacion,
+    DoctorPatch,
+    DoctorPublic,
+    RecuperarConfirmacionIn,
+    RecuperarSolicitudIn,
+    RegistroIn,
+    SolicitudRecuperacionOut,
+)
 from app.security import (
     clear_session_cookie,
     crear_token,
@@ -17,6 +35,8 @@ from app.security import (
     set_session_cookie,
     verify_password,
 )
+from app.services import recuperacion
+from app.services.correo import Canal, Proveedor
 from app.utils import normalizar_slug, slug_disponible
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -165,3 +185,81 @@ async def cambiar_contrasena(
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="La contraseña actual no es correcta")
     doctor.password_hash = hash_password(datos.nueva)
     await session.commit()
+
+
+# Lo que se lee en la pantalla cuando no hay canal: dicho sin rodeos y con la salida que sí existe.
+SIN_CANAL_DE_CORREO = (
+    "Este despliegue todavía no puede mandar correos, así que no hay forma honesta de devolverte el "
+    "acceso por email. Si tienes la sesión abierta en otro aparato, puedes cambiar la contraseña desde "
+    "el panel; si no, hace falta configurar el correo del consultorio."
+)
+
+
+def _estado_recuperacion(canal: Canal) -> tuple[bool, str | None]:
+    """Si este despliegue puede ofrecer recuperar el acceso, y por qué no si no puede.
+
+    Es una función y no dos trozos de `if` repetidos: el mismo criterio lo lee la pantalla para pintar
+    el botón y lo aplica el endpoint para negarse. Si se separan, la interfaz promete algo que la API
+    rechaza.
+    """
+    return disponible_recuperacion(canal_listo=canal.listo, es_desarrollo=get_settings().es_desarrollo)
+
+
+@router.get("/recuperar/disponible", response_model=DisponibilidadRecuperacion)
+async def recuperar_disponible(canal: Canal = Depends(get_canal_correo)) -> DisponibilidadRecuperacion:
+    """La pregunta que hace la pantalla de acceso antes de ofrecer nada.
+
+    Devuelve 200 en los dos casos: no es un error que el canal no esté, es una circunstancia del
+    despliegue que la interfaz tiene que poder explicar. Es pública porque la hace quien no puede
+    entrar, que es justamente para quien existe esta ruta.
+    """
+    disponible, razon = _estado_recuperacion(canal)
+    return DisponibilidadRecuperacion(disponible=disponible, razon=razon)
+
+
+@router.post("/recuperar/solicitar", response_model=SolicitudRecuperacionOut, status_code=status.HTTP_202_ACCEPTED)
+async def recuperar_solicitar(
+    datos: RecuperarSolicitudIn,
+    session: AsyncSession = Depends(get_session),
+    canal: Canal = Depends(get_canal_correo),
+    proveedor: Proveedor = Depends(get_proveedor_correo),
+    ahora: datetime = Depends(get_ahora),
+) -> SolicitudRecuperacionOut:
+    """Pedir el enlace. La respuesta es siempre la misma y siempre en 202.
+
+    No hay 404 para un email que no es de ninguna consulta, ni un "te lo hemos mandado" que solo suena
+    cuando existe: contar la diferencia sería publicar qué correos tienen agenda montada. Lo que sí hace
+    el 202 es compromiso de intento, nunca de entrega, y así está escrito en la pantalla.
+
+    El 503 de "no hay canal" no filtra cuentas: depende solo de la configuración del despliegue, que es
+    la misma para todos los emails del mundo.
+    """
+    disponible, _ = _estado_recuperacion(canal)
+    if not disponible:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=SIN_CANAL_DE_CORREO)
+    await recuperacion.solicitar(
+        session, proveedor, origen=canal.origen_enlace, email=datos.email, ahora=ahora
+    )
+    return SolicitudRecuperacionOut()
+
+
+@router.post("/recuperar/confirmar", status_code=status.HTTP_204_NO_CONTENT)
+async def recuperar_confirmar(
+    datos: RecuperarConfirmacionIn,
+    session: AsyncSession = Depends(get_session),
+    ahora: datetime = Depends(get_ahora),
+) -> None:
+    """Consumir el enlace y escribir la clave nueva. No abre sesión: deja que el médico entre él.
+
+    Abrir la sesión desde aquí sería peor de dos maneras: el navegador que consume el enlace puede ser
+    el del teléfono donde alguien leyó el correo, y una contraseña que se acaba de recuperar no debería
+    repartir cookies sin que su dueño pida entrar.
+
+    El fallo es un solo mensaje para los tres casos (no existe, caducó, ya se usó) por lo mismo que el
+    pedido no distingue emails: aquí tampoco se le cuenta a nadie cómo va su intento.
+    """
+    if not await recuperacion.confirmar(session, token=datos.token, nueva=datos.nueva, ahora=ahora):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Ese enlace no sirve: caducó, ya se usó o no es de esta agenda. Pide uno nuevo.",
+        )

@@ -1,4 +1,4 @@
-"""Modelos SQLAlchemy — las 7 tablas del plan (migración 0001)."""
+"""Modelos SQLAlchemy: las 7 tablas del plan (migración 0001) y los enlaces de recuperación (0006)."""
 
 import uuid
 from datetime import date, datetime, time
@@ -203,3 +203,32 @@ class Waitlist(Base):
     avisado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     hueco_ofrecido: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class PasswordReset(Base):
+    """Un enlace de recuperación de acceso: de un solo uso y con caducidad corta.
+
+    Lo que se guarda es el SHA-256 del token, nunca el token. Una base de datos de proveedor es un
+    volcado que alguien puede leer con otras intenciones, y un hash irreversible de 32 bytes aleatorios
+    no da acceso a nada: quien robe la tabla obtiene un valor que ya no puede usar para entrar.
+
+    `error_envio` guarda por qué no salió el correo, si no salió. Es solo para el log de operaciones:
+    la respuesta pública no la enseña nunca, porque decir "ese email no pudo recibir el enlace" ya es
+    decir que ese email tiene una cuenta.
+    """
+
+    __tablename__ = "password_resets"
+    __table_args__ = (
+        # Un token que nace caducado es un registro inútil que además promete algo que no cumple.
+        CheckConstraint("expira_en > creado_en", name="ck_password_reset_caducidad"),
+        # El cooldown y la limpieza del propio consultorio buscan por doctor, no por token.
+        Index("ix_password_resets_doctor_creado", "doctor_id", "creado_en"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID, primary_key=True, server_default=text("gen_random_uuid()"))
+    doctor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("doctors.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    creado_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expira_en: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    usado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_envio: Mapped[str | None] = mapped_column(Text)

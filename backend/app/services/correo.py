@@ -120,3 +120,26 @@ def proveedor_desde_configuracion() -> Proveedor:
         de=ajustes.smtp_de or "",
         ssl_directo=ajustes.smtp_ssl,
     )
+
+
+@dataclass(frozen=True)
+class Canal:
+    """Lo que se puede saber del canal sin abrir una conexión ni pedir credenciales.
+
+    Lo necesita la cara pública para responder a "¿puedo recuperar mi contraseña por email?" sin
+    intentar mandar nada: construir el proveedor real es conectar o fallar, y aquí lo que se quiere es
+    solo leer la configuración.
+    """
+
+    nombre: str
+    listo: bool
+    origen_enlace: str
+
+
+def canal_desde_configuracion() -> Canal:
+    """El canal dicho en tres datos: cuál es, si daría la cara y de qué dominio cuelgan sus enlaces."""
+    ajustes = get_settings()
+    elegido = (ajustes.recordatorios_proveedor or "simulado").strip().lower()
+    es_smtp = elegido == "smtp"
+    listo = es_smtp and bool((ajustes.smtp_host or "").strip()) and bool((ajustes.smtp_de or "").strip())
+    return Canal(nombre="smtp" if es_smtp else "simulado", listo=listo, origen_enlace=ajustes.frontend_origin)

@@ -12,6 +12,7 @@ De ahí que el guardia dependa de `ENTORNO` y no de que alguien recuerde una lis
 import logging
 
 from app.config import SECRETO_DE_DESARROLLO, Settings, get_settings
+from app.domain.recuperacion import es_origen_local
 
 log = logging.getLogger("agenda.arranque")
 
@@ -86,6 +87,12 @@ def _avisos(s: Settings) -> list[str]:
         avisos.append(
             f"RECORDATORIOS_PROVEEDOR={s.recordatorios_proveedor!r} no es 'smtp' ni 'simulado': se "
             "usa el simulado, o sea que ningún correo sale realmente."
+        )
+    if s.recordatorios_proveedor == "smtp" and es_origen_local(s.frontend_origin):
+        avisos.append(
+            f"RECORDATORIOS_PROVEEDOR=smtp con FRONTEND_ORIGIN={s.frontend_origin!r}: los correos salen, "
+            "pero los enlaces de recuperación apuntan a esta máquina y nadie puede abrirlos desde su "
+            "teléfono. En un despliegue público va el dominio real."
         )
     return avisos
 

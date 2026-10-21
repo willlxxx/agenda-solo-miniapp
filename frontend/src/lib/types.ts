@@ -267,3 +267,19 @@ export type Retencion = {
 	meses: number;
 	explicacion: string;
 };
+
+/**
+ * Lo que contesta `GET /auth/recuperar/disponible`. `razon` llega solo cuando el despliegue no puede
+ * mandar el enlace (`sin_canal_de_correo`) o cuando puede pero por un canal que no es correo real en
+ * desarrollo (`simulado_en_desarrollo`): la pantalla lo necesita para decir la verdad en vez de
+ * prometer un buzón que no existe.
+ */
+export type DisponibilidadRecuperacion = {
+	disponible: boolean;
+	razon: string | null;
+};
+
+/** `POST /auth/recuperar/solicitar`: 202 y esta única forma, exista la cuenta o no. */
+export type SolicitudRecuperacion = {
+	aceptada: boolean;
+};

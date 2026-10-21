@@ -5,6 +5,7 @@ import type {
 	CitaAgenda,
 	DiaBloqueado,
 	Disponibilidad,
+	DisponibilidadRecuperacion,
 	Doctor,
 	EntradaLista,
 	EstadoCita,
@@ -17,6 +18,7 @@ import type {
 	ReservaAsistida,
 	Retencion,
 	Servicio,
+	SolicitudRecuperacion,
 	Supresion
 } from '#lib/types';
 
@@ -77,6 +79,15 @@ export const api = {
 		request<Doctor>('/auth/yo', { method: 'PATCH', body: JSON.stringify(datos) }),
 	cambiarContrasena: (actual: string, nueva: string) =>
 		request<void>('/auth/contrasena', json({ actual, nueva })),
+
+	// Recuperar el acceso sin sesión. Las tres son públicas por necesidad: quien las llama es justo
+	// quien no puede entrar. `recuperarDisponible` se consulta antes de ofrecer el botón para no prometer
+	// un correo que este despliegue todavía no puede mandar.
+	recuperarDisponible: () => request<DisponibilidadRecuperacion>('/auth/recuperar/disponible'),
+	recuperarSolicitar: (email: string) =>
+		request<SolicitudRecuperacion>('/auth/recuperar/solicitar', json({ email })),
+	recuperarConfirmar: (token: string, nueva: string) =>
+		request<void>('/auth/recuperar/confirmar', json({ token, nueva })),
 
 	servicios: () => request<Servicio[]>('/services'),
 	crearServicio: (datos: object) => request<Servicio>('/services', json(datos)),

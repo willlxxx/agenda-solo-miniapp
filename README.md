@@ -262,9 +262,10 @@ Reglas:
 - **Ventana, no instante.** El aviso de 24 h vale mientras el adelanto esté entre 12 y 24 h, y el de
   1 h entre 40 y 60 minutos. Un cron que se salta un tick no pierde el aviso; uno que estuvo caído
   tres días no manda un "mañana tienes cita" sobre una cita ya pasada.
-- **Horas de silencio 08:00–21:00 en el huso del doctor.** Un recordatorio a las 03:00 es una queja
-  segura. Si la ventana entera cae de madrugada, ese aviso no sale y la bandera queda sin marcar:
-  la pasada siguiente podrá mandarlo mientras esté en ventana.
+- **Solo escribe entre 08:00 y 21:00 en el huso del doctor; fuera de esa franja, silencio.** Un
+  recordatorio a las 03:00 es una queja segura. Si la ventana entera cae de madrugada (cita a las 21:30
+  con el aviso de 1 h ya fuera de horario), ese aviso no sale y la bandera queda sin marcar: la pasada
+  siguiente podrá mandarlo mientras esté en ventana.
 - **Candado por doctor** (`pg_advisory_xact_lock('recordatorios:{doctor}')`), clave distinta de la de
   las citas. Dentro del candado se vuelven a leer las banderas: si otra pasada ya mandó el aviso,
   cuenta como `omitidos` y no se repite.
@@ -473,8 +474,8 @@ Está en `frontend/src/styles.css` (tokens, estados, animaciones), `frontend/src
 
 El médico ya podía cambiar servicios, horario, vacaciones y retención, pero no su propia ficha. Si se
 registró desde el móvil con el huso por defecto no había forma de corregirlo, y el huso guardado decide
-dos cosas visibles: la franja 08:00–21:00 en la que el cron se calla y la hora con la que se lee cada
-cita de la agenda. Tampoco había forma de cambiar la contraseña sin escribir a nadie.
+dos cosas visibles: la franja 08:00–21:00 en la que el cron escribe (y calla fuera de ella) y la hora con
+la que se lee cada cita de la agenda. Tampoco había forma de cambiar la contraseña sin escribir a nadie.
 
 | Endpoint | Qué hace |
 | --- | --- |
@@ -510,6 +511,52 @@ mientras el viejo da 404, y el hash que sigue siendo `$argon2id$` sin contener l
 368 passed, 2 skipped. `svelte-check` 0 errores / 0 avisos. En vivo sobre una cuenta desechable: el 409
 «Ese enlace ya lo usa otra consulta» y el 422 «Huso horario desconocido: …» leídos en la pantalla sin que
 nada se guardara, y `POST /auth/acceso` `401` con la clave vieja / `200` con la nueva tras cambiarla.
+
+## Recuperar el acceso cuando se olvida la contraseña (Semana 2)
+
+Con «Mi consulta» ya se puede cambiar la clave desde dentro, pero eso no ayuda a quien se ha quedado
+fuera: sin la sesión abierta no había ninguna puerta, y la alternativa era escribir a alguien que no existe.
+Aquí está esa puerta, con la condición de que no prometa más de lo que el despliegue puede cumplir.
+
+| Endpoint | Qué hace |
+| --- | --- |
+| `GET /api/v1/auth/recuperar/disponible` | `200` con `{disponible, razon}`. Es la pregunta que hace la pantalla antes de ofrecer el botón. `razon` vale `sin_canal_de_correo` (no hay SMTP y no es desarrollo) o `simulado_en_desarrollo` (se puede recorrer, pero el enlace no sale por correo). No es un error no poder: es una circunstancia del despliegue que hay que poder explicar. |
+| `POST /api/v1/auth/recuperar/solicitar` | `202 {"aceptada": true}` **siempre**, exista la cuenta o no. Sin canal: `503`, y el 503 depende solo de la configuración, que es la misma para todos los emails del mundo, así que no filtra cuentas. |
+| `POST /api/v1/auth/recuperar/confirmar` | `204` y la clave nueva escrita. `400` con un solo mensaje para los tres casos (no existe, caducó, ya se usó). `422` si la clave tiene menos de 8 caracteres. **No abre sesión.** |
+
+Reglas, y por qué son así:
+
+- **El token viaja en el fragmento** (`/recuperar#token=…`), no en la query. El fragmento no se envía al
+  servidor: no acaba en los registros de la API, ni en el `Referer` de nadie, ni en el historial del proxy.
+- **En la base no hay token, hay SHA-256** (`password_resets`, migración `0006`). Un volcado de la base del
+  host da hashes de 32 bytes aleatorios, que ya no sirven para entrar.
+- **30 minutos y un solo uso.** Al consumir el enlace se borran los demás tokens del mismo consultorio, y
+  antes de crear uno se borran los gastados y caducados de esa cuenta: la tabla no crece esperando a un
+  cron de limpieza que todavía no corre. `expira_en > creado_en` está como restricción, no como costumbre.
+- **Un pedido cada minuto por consultorio.** Dos clicks seguidos suelen ser «no me ha llegado», y cada click
+  escribe una fila y abre el canal de correo.
+- **Contar es la filtración.** Ni el 202 dice si el email existe, ni el fallo de entrega se cuenta: el
+  motivo se guarda en `error_envio` para el log y la respuesta pública es idéntica.
+- **Sin canal real, no se ofrece.** Con `RECORDATORIOS_PROVEEDOR=simulado` y `ENTORNO=produccion` el endpoint
+  devuelve `503` con la salida que sí existe (cambiar la clave desde un aparato donde siga abierto). En
+  desarrollo sí se recorre el flujo y el enlace se imprime en el log, que es como se probó sin credenciales
+  de nadie.
+- **Cambiar la clave no cierra las demás sesiones.** No hay lista de revocación: una cookie firmada antes
+  sigue entrando hasta que caduque (`JWT_TTL_DIAS`). La pantalla lo dice en vez de dejarlo implícito, y la
+  única mitigación real es `Salir` desde ese aparato. Está apuntado como siguiente paso cerrar sesiones con
+  `sesiones_desde` e `iat`.
+
+Verificado: 24 pruebas en `tests/test_recuperacion.py` contra `agenda_test` (el hash guardado y el token en
+claro ausente, las respuestas idénticas con y sin cuenta, el cooldown de 60 s, caducidad, reuso `400`,
+hermanos borrados, `error_envio` tras un fallo de entrega, el `503` sin canal y el `simulado_en_desarrollo`).
+Suite completa: 392 passed, 2 skipped. Ruff limpio, `svelte-check` 0 errores / 0 avisos y `npm run build`
+ok. En vivo, con la API sirviendo la interfaz en `127.0.0.1:8000` y canal simulado: desde la pantalla de
+acceso se abre la tarjeta de recuperación —que enseña el aviso honesto del canal simulado—, se pide el
+enlace, sale por la consola con su `#token=`, se abre en el navegador, se pone la clave nueva y se entra con
+ella (`200`) mientras la vieja da `401`; reusar el enlace da `400` y un email sin cuenta da el mismo `202`.
+La cuenta con la que se probó se creó y se borró por su `id`, y `password_resets` quedó a cero filas. Lo que
+**no** está probado sigue siendo la entrega real: hasta que el SMTP del consultorio esté puesto, en
+producción no hay correo que salga y la pantalla lo dice.
 
 ## Publicar: la interfaz la sirve el propio FastAPI (Semana 2)
 
@@ -732,9 +779,10 @@ Sobre la **Restart Policy** del servicio del cron: con un horario puesto, el pro
 dice —*Services with a cron schedule do not have a restart policy*—, así que no hay que cambiarla a
 `None` a mano; el proceso que termina bien no vuelve a arrancar.
 
-**7. El SMTP del doctor: lo único que hace que salga un correo.** Van seis variables en el **servicio web**
+**7. El SMTP del doctor: lo único que hace que salga un correo.** Se escriben cinco en el **servicio web**
 (`Settings → Variables`), no en `cron-avisos`: quien abre la conexión SMTP es el proceso que despacho hace, y
-el cron solo llama por HTTP a la ruta interna.
+el cron solo llama por HTTP a la ruta interna. Son siete si se cuentan las dos que llevan default
+(`SMTP_PORT=587` y `SMTP_SSL=false`), y siete menos una si el proveedor autentica sin usuario.
 
 ```
 RECORDATORIOS_PROVEEDOR=smtp
@@ -760,9 +808,9 @@ la cuenta autenticada.
 Para comprobar que un correo sale de verdad hay dos trampas, y las dos se ven como «no funciona» sin serlo.
 **Una cita ya avisada no se reavisa**: si la bandera de 1 h está puesta (a aquí le pasó a la de las 03:01, con
 el simulado), cambiar a `smtp` no envía nada sobre esa cita; hay que reservar una nueva, a sí mismo con email,
-a unos 50 minutos (la ventana de 1 h pide entre 40 y 60, ni más ni menos). Y la **franja de silencio
-08:00–21:00 en el huso del consultorio** manda callar fuera de esa hora: una pasada de madrugada sale con
-`planificados: 0` con el SMTP perfecto. La pasada no hace falta esperarla: se fuerza desde cualquier máquina
+a unos 50 minutos (la ventana de 1 h pide entre 40 y 60, ni más ni menos). Y el cron **solo escribe entre
+08:00 y 21:00 en el huso del consultorio**: una pasada de madrugada sale con `planificados: 0` con el SMTP
+perfecto. La pasada no hace falta esperarla: se fuerza desde cualquier máquina
 con el mismo guion del cron.
 
 ```
@@ -836,8 +884,8 @@ sus contadores, y los contadores cuentan una historia seguida:
 `proveedor: "simulado"` van en todas y aquí están cortados por legibilidad).
 Hasta las 03:01 la pasada barría la única cita confirmada de la base real y el dominio decidía callar:
 `candidatas: 1` con `planificados: 0` es una cita dentro del rango de lectura pero fuera de las dos ventanas de
-adelanto (24 h pide entre 12 y 24 h de margen, 1 h entre 40 y 60 minutos), o dentro de la franja de silencio del
-huso del doctor. A las 03:01 entró en la ventana de 1 h y esa pasada hizo el recorrido completo:
+adelanto (24 h pide entre 12 y 24 h de margen, 1 h entre 40 y 60 minutos), o fuera de la franja en la que el
+cron escribe (08:00–21:00 del huso del doctor). A las 03:01 entró en la ventana de 1 h y esa pasada hizo el recorrido completo:
 `planificados: 1, enviados: 1, enviados_1h: 1` —leyó la agenda, decidió, entregó al proveedor y escribió la
 bandera con su marca de tiempo en el PostgreSQL del host. Con `RECORDATORIOS_PROVEEDOR=simulado` la entrega es
 el registro interno, no un correo que alguien recibió: lo probado es el viaje hasta la bandera, y lo que sigue
@@ -888,11 +936,13 @@ correo saliera. Lo que falta:
 - El aviso de retención de la página pública todavía dice que se puede pedir el archivo o el borrado,
   pero no cuantifica el plazo. En cuanto el cron de limpieza esté montado se puede añadir "y se borra
   solo a los X meses"; hasta entonces sería prometer un automático que no corre.
-- **Recuperar la contraseña**: con la sesión abierta ya se cambia desde «Mi consulta», pero quien la olvida
-  está fuera y no tiene por dónde volver. Para devolverle el acceso hacen falta dos cosas que aún no están:
-  una tabla de tokens de un solo uso con su migración, y el **SMTP real del doctor** —un enlace que no se
-  puede verificar entregado en el buzón de la consulta no es una recuperación, es una puerta abierta—.
-  Sin ese canal probado no hay forma honesta de prometerle que el correo le llega, así que se deja para
-  después del SMTP y no se simula en la cara pública.
+- **Recuperar la contraseña: el camino está, falta el buzón.** La tabla de tokens de un solo uso (`0006`),
+  los tres endpoints y las dos pantallas están hechos y verificados en local con el canal simulado, y en
+  producción la cara pública se niega (`503`) antes que prometer un correo que no sale. Lo que falta es el
+  **SMTP real del doctor**: con `RECORDATORIOS_PROVEEDOR=smtp` y sus variables puestas, comprobar la
+  recuperación exige ver el enlace en un buzón de verdad, no leer el `202`.
+- Cerrar las sesiones que quedan abiertas cuando la clave cambia (a mano o por recuperación). Hoy no hay
+  lista de revocación y la pantalla lo dice; la propuesta es un `sesiones_desde` por consultorio comparado
+  con el `iat` de la cookie, y todavía no está aprobada.
 - Fase 2 del documento, todavía fuera: pagos, Google Calendar, integración con el software dental.
 

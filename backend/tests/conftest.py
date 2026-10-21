@@ -78,7 +78,10 @@ async def limpio(_database: str) -> None:
     engine = create_async_engine(_database, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.execute(
-            text("TRUNCATE appointments, waitlist, patients, services, availability, blocked_dates, doctors CASCADE")
+            text(
+                "TRUNCATE appointments, waitlist, patients, services, availability, blocked_dates, "
+                "password_resets, doctors CASCADE"
+            )
         )
     await engine.dispose()
 

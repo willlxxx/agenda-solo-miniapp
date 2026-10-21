@@ -99,6 +99,40 @@ class CambioContrasenaIn(BaseModel):
     nueva: str = Field(min_length=8, max_length=128)
 
 
+class RecuperarSolicitudIn(BaseModel):
+    """Pedir el enlace. Solo hace falta el email, y la respuesta no va a decir si esa cuenta existe."""
+
+    email: EmailStr
+
+
+class SolicitudRecuperacionOut(BaseModel):
+    """La única respuesta que da el pedido, igual para las dos mitades del caso.
+
+    No hay campo `existe` ni un 404 para el email desconocido: cualquier diferencia contaría qué correos
+    tienen una agenda montada, que es justo el listado que un atacante querría para apuntar sus intentos.
+    """
+
+    aceptada: bool = True
+
+
+class DisponibilidadRecuperacion(BaseModel):
+    """Lo que la cara pública lee antes de ofrecer el botón de recuperar.
+
+    `razon` es el identificador del caso, no un texto: el frontend decide qué dice en cada uno, y así
+    el mensaje en español no sale del lado de la interfaz.
+    """
+
+    disponible: bool
+    razon: str | None = None
+
+
+class RecuperarConfirmacionIn(BaseModel):
+    """Consumir el enlace: el token tal cual viajó en el fragmento, y la clave nueva."""
+
+    token: str = Field(min_length=20, max_length=200)
+    nueva: str = Field(min_length=8, max_length=128)
+
+
 class ServiceIn(BaseModel):
     nombre: str = Field(min_length=1, max_length=80)
     duracion_minutos: int = Field(ge=5, le=240)
