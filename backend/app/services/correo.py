@@ -1,11 +1,13 @@
-"""Salida de correo de los recordatorios: dos canales reales y uno de simulación.
+"""Salida de correo de los recordatorios: dos canales de API HTTPS, uno de SMTP y uno de simulación.
 
 `simulado` no toca la red: guarda lo que habría mandado. Es el valor por defecto en desarrollo y en
 los tests, y es lo que permite probar el despacho entero sin credenciales de nadie ni mensajes
 reales a pacientes. `smtp` usa la librería estándar dentro de un hilo: SMTP no es asíncrono y no
-hacía falta añadir una dependencia para algo que corre una vez cada pocos minutos. `brevo` llama a
-la API HTTPS de Brevo con `httpx`, y existe por un motivo concreto: el egress de SMTP de Railway
-está apagado fuera del plan Pro, así que un despliegue ahí con `smtp` no llega a conectar.
+hacía falta añadir una dependencia para algo que corre una vez cada pocos minutos. `brevo` y `resend`
+llaman a la API HTTPS de un servicio de envíos con `httpx`, y existen por un motivo concreto: el
+egress de SMTP de Railway está apagado fuera del plan Pro, así que un despliegue ahí con `smtp` no
+llega a conectar. De los dos, `resend` es el que se puede montar con esta cuenta (Brevo no deja
+verificar el buzón desde Venezuela) y el que pide dominio verificado a cambio.
 
 El proveedor se elige por configuración, así que cambiar de canal (WhatsApp, SMS) después es añadir
 una clase aquí y una variable en `.env`, no reescribir el despacho.
@@ -96,26 +98,28 @@ class Smtp:
 
 
 URL_DE_BREVO = "https://api.brevo.com/v3/smtp/email"
+URL_DE_RESEND = "https://api.resend.com/emails"
 # El aviso corre en el cron o en un request de recuperación: ninguno de los dos puede quedarse colgado
 # medio minuto mirando una API que no contesta.
-TIEMPO_LIMITE_DE_BREVO = 15.0
-# Brevo contesta 201 con el `messageId`; se aceptan los 2xx porque el código exacto no es contrato.
+TIEMPO_LIMITE_DE_API = 15.0
+# Los dos servicios contestan 201 con su identificador; se aceptan los 2xx porque el código exacto no es contrato.
 CODICOS_DE_ENTREGA = frozenset({200, 201, 202})
 
 
-def _razon_de_brevo(respuesta: httpx.Response) -> str:
-    """Lo que Brevo dice en el cuerpo, o el texto crudo si no es el JSON de siempre.
+def _razon_del_proveedor(respuesta: httpx.Response) -> str:
+    """Lo que el servicio dice en el cuerpo, o el texto crudo si no es el JSON de siempre.
 
     Vale más que un `HTTP 400` pelado porque este texto es el que acaba en `password_resets.error_envio`
     y en el contador del cron: cuando el remitente no está verificado, el `400` no lo dice y el que lee
-    el log se pone a mirar la red en vez del panel de Brevo.
+    el log se pone a mirar la red en vez del panel del proveedor. Brevo escribe `message` y `code`, Resend
+    escribe `message` y `name`; se leen los cuatro y gana el primero que traiga texto.
     """
     try:
         datos = respuesta.json()
     except ValueError:
         datos = None
     if isinstance(datos, dict):
-        for clave in ("message", "Code", "code"):
+        for clave in ("message", "Code", "code", "name"):
             valor = datos.get(clave)
             if isinstance(valor, str) and valor.strip():
                 return valor.strip()[:300]
@@ -128,7 +132,9 @@ class Brevo:
 
     Nace de un fallo visto en producción: con `smtp` el contenedor no llega a abrir el socket contra
     `smtp.gmail.com:587` --`[Errno 101] Network is unreachable`--, porque el egress de SMTP está
-    apagado fuera del plan Pro. El 443 de una API de envíos sí sale.
+    apagado fuera del plan Pro. El 443 de una API de envíos sí sale. Se queda en el repo aunque este
+    despliegue use `Resend`: la cuenta no pudo verificar el buzón desde Venezuela, pero el canal es
+    válido para otro consultorio y sus pruebas siguen siendo las mismas que atan a `resend`.
 
     Mismo contrato que `Smtp`: `enviar` solo lanza `ErrorEnvio`, nunca un `httpx.HTTPStatusError` suelto,
     porque el despacho y la recuperación cuentan sus reintentos sobre esa excepción.
@@ -155,7 +161,7 @@ class Brevo:
     async def enviar(self, correo: Correo) -> None:
         try:
             async with httpx.AsyncClient(
-                timeout=TIEMPO_LIMITE_DE_BREVO, transport=self.transporte
+                timeout=TIEMPO_LIMITE_DE_API, transport=self.transporte
             ) as cliente:
                 respuesta = await cliente.post(
                     URL_DE_BREVO,
@@ -166,7 +172,67 @@ class Brevo:
             raise ErrorEnvio(f"Brevo no pudo entregar a {correo.para}: {exc}") from exc
         if respuesta.status_code not in CODICOS_DE_ENTREGA:
             raise ErrorEnvio(
-                f"Brevo rechazó el envío a {correo.para} ({respuesta.status_code}): {_razon_de_brevo(respuesta)}"
+                f"Brevo rechazó el envío a {correo.para} ({respuesta.status_code}): "
+                f"{_razon_del_proveedor(respuesta)}"
+            )
+
+
+@dataclass(frozen=True)
+class Resend:
+    """El envío por la API HTTPS de Resend, el canal que toca en este despliegue.
+
+    Entra en lugar de `Brevo` por un motivo de cuenta, no de código: Brevo no dejó verificar el buzón
+    desde Venezuela. Resend abre por el mismo 443 y con el mismo contrato que `Smtp` --`enviar` solo
+    lanza `ErrorEnvio`--, pero cobra un requisito que Brevo no cobraba: el dominio del remitente tiene
+    que estar verificado en su panel, así que un `doctor@gmail.com` en `RESEND_DE` se rechaza. La
+    respuesta de ese rechazo (`message` del JSON) es la que acaba en `error_envio`.
+
+    El "De:" se manda como una sola cadena, `Nombre <correo>`, a diferencia de Brevo que pide el nombre
+    y la dirección en campos separados.
+    """
+
+    nombre: str = "resend"
+    api_key: str = ""
+    de: str = ""
+    nombre_remitente: str = ""
+    # Solo para los tests: un transporte de mentira, para probar el contrato sin tocar la red ni una
+    # cuenta de nadie. En producción llega a `None` desde la configuración.
+    transporte: httpx.AsyncBaseTransport | None = None
+
+    def _remitente(self) -> str:
+        if "<" in self.de:
+            # Alguien ya escribió `Consulta <avisos@dominio.com>` en la variable: no se dobla.
+            return self.de
+        if not self.nombre_remitente:
+            return self.de
+        return f"{self.nombre_remitente} <{self.de}>"
+
+    def _cuerpo(self, correo: Correo) -> dict:
+        return {
+            "from": self._remitente(),
+            "to": [correo.para],
+            "subject": correo.asunto,
+            # `text`, no `html`: los textos de `app/domain` ya son llanos, y meterlos en HTML sería cambiar
+            # cómo se leen sin haberlo decidido en el dominio.
+            "text": correo.cuerpo,
+        }
+
+    async def enviar(self, correo: Correo) -> None:
+        try:
+            async with httpx.AsyncClient(
+                timeout=TIEMPO_LIMITE_DE_API, transport=self.transporte
+            ) as cliente:
+                respuesta = await cliente.post(
+                    URL_DE_RESEND,
+                    json=self._cuerpo(correo),
+                    headers={"authorization": f"Bearer {self.api_key}", "accept": "application/json"},
+                )
+        except httpx.HTTPError as exc:
+            raise ErrorEnvio(f"Resend no pudo entregar a {correo.para}: {exc}") from exc
+        if respuesta.status_code not in CODICOS_DE_ENTREGA:
+            raise ErrorEnvio(
+                f"Resend rechazó el envío a {correo.para} ({respuesta.status_code}): "
+                f"{_razon_del_proveedor(respuesta)}"
             )
 
 
@@ -194,6 +260,13 @@ def canal_elegido(ajustes: Settings) -> tuple[str, list[str]]:
             if not (valor or "").strip()
         ]
         return "brevo", faltan
+    if elegido == "resend":
+        faltan = [
+            nombre
+            for nombre, valor in (("RESEND_API_KEY", ajustes.resend_api_key), ("RESEND_DE", ajustes.resend_de))
+            if not (valor or "").strip()
+        ]
+        return "resend", faltan
     raise ValueError(f"Proveedor de recordatorios desconocido: {ajustes.recordatorios_proveedor!r}")
 
 
@@ -214,6 +287,12 @@ def proveedor_desde_configuracion() -> Proveedor:
             api_key=(ajustes.brevo_api_key or "").strip(),
             de=(ajustes.brevo_de or "").strip(),
             nombre_remitente=(ajustes.brevo_nombre or "").strip(),
+        )
+    if elegido == "resend":
+        return Resend(
+            api_key=(ajustes.resend_api_key or "").strip(),
+            de=(ajustes.resend_de or "").strip(),
+            nombre_remitente=(ajustes.resend_nombre or "").strip(),
         )
     return Smtp(
         host=ajustes.smtp_host or "",

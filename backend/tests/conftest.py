@@ -223,3 +223,54 @@ async def sql_filas(consulta: str, **params) -> list[tuple]:
 @pytest.fixture
 async def doctor(client: AsyncClient) -> dict:
     return await registrar(client)
+
+
+# --- Andamio de los canales de API HTTPS (Brevo y Resend) ---
+#
+# Los dos proveedores llaman con `httpx` contra el panel de un servicio de envíos, y lo que hay que probar
+# de ellos es lo mismo: a qué URL sale, con qué cabecera viaja la clave, cómo queda el cuerpo, y que
+# cualquier rechazo se convierta en `ErrorEnvio`. El transporte de mentira vive aquí, y no repetido en cada
+# archivo, para que un cambio de contrato no tenga que afirmarse dos veces.
+
+
+def transporte_devolviendo(*, status_code: int, cuerpo: str = "", contenido: str = "application/json"):
+    """El transporte de mentira, más el pedido que realmente salió.
+
+    Se afirma sobre el pedido que construyó httpx y no sobre los argumentos del proveedor: lo que decide si
+    el aviso llega es el JSON y las cabeceras finales, y ahí es donde un remitente mal formado se convierte
+    en un 400 del panel del proveedor --ningún correo sale-- sin que el log de la app diga nada.
+    """
+    import httpx
+
+    visto: dict[str, httpx.Request] = {}
+
+    def manejar(pedido: httpx.Request) -> httpx.Response:
+        visto["pedido"] = pedido
+        return httpx.Response(status_code, text=cuerpo, headers={"content-type": contenido})
+
+    return httpx.MockTransport(manejar), visto
+
+
+def transporte_reventando(exc: Exception):
+    """El camino sin respuesta: red cortada o tiempo límite, que también tienen que ser `ErrorEnvio`."""
+    import httpx
+
+    def manejar(pedido: httpx.Request) -> httpx.Response:
+        raise exc
+
+    return httpx.MockTransport(manejar)
+
+
+def con_ajustes(monkeypatch, **kwargs):
+    """Los ajustes tal como los vería el despliegue, sin `.env` de por medio.
+
+    Se sustituye `get_settings` del módulo y no la variable de entorno: el `.env` de quien corre la suite
+    puede tener un SMTP puesto de una prueba manual, y entonces el test describiría esa máquina en lugar
+    de describir el código.
+    """
+    from app.config import Settings
+    from app.services import correo as modulo_de_correo
+
+    ajustes = Settings(_env_file=None, **kwargs)
+    monkeypatch.setattr(modulo_de_correo, "get_settings", lambda: ajustes)
+    return ajustes

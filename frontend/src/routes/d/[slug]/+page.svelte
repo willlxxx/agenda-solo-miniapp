@@ -88,7 +88,7 @@
 	// en la misma pantalla donde se promete el aviso. `smtp` es el correo de la consulta, así que no hay
 	// nada que declarar; un canal que aquí no esté escrito se declara como 'un servicio de envíos': menos
 	// preciso y sigue siendo verdad, que es el orden correcto delante de un paciente.
-	const SERVICIOS_DE_ENVIO: Record<string, string> = { brevo: 'Brevo' };
+	const SERVICIOS_DE_ENVIO: Record<string, string> = { brevo: 'Brevo', resend: 'Resend' };
 	const terceros = $derived(
 		data.canal_de_avisos === 'smtp' || data.canal_de_avisos === 'simulado'
 			? null

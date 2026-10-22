@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     brevo_api_key: str | None = None
     brevo_de: str | None = None
     brevo_nombre: str | None = None
+    # Resend, otra API HTTPS de envíos. Es la que se puede montar desde esta cuenta: Brevo no deja
+    # verificar el buzón desde Venezuela. A cambio pide algo que Brevo no pedía: el dominio del
+    # remitente tiene que estar verificado en su panel, así que el "De:" no puede ser un Gmail.
+    resend_api_key: str | None = None
+    resend_de: str | None = None
+    resend_nombre: str | None = None
     # Lo que manda el cron externo en la cabecera x-cron-secret. Sin valor, el endpoint está apagado.
     cron_secret: str | None = None
 

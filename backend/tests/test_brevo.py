@@ -13,6 +13,9 @@ las que el envío necesita. De ahí las tres capas de este archivo:
   el constructor del proveedor y el guardia de arranque, así que no pueden volver a contradecirse.
 - **el contrato con la recuperación**: un Brevo que rechaza deja el motivo en `password_resets.error_envio`
   y la respuesta pública sigue siendo un 202.
+
+El andamio (`transporte_devolviendo`, `con_ajustes`) está en `tests/conftest.py` porque `Resend` es el mismo
+contrato con otro formato: ver `tests/test_resend.py`.
 """
 
 import json
@@ -25,62 +28,33 @@ from httpx import AsyncClient
 from app.api.deps import get_canal_correo, get_proveedor_correo
 from app.config import Settings
 from app.main import app
-from app.services import correo as modulo_de_correo
 from app.services.correo import (
     URL_DE_BREVO,
     Brevo,
     Canal,
     Correo,
     ErrorEnvio,
+    Resend,
     Smtp,
     canal_desde_configuracion,
     canal_elegido,
     proveedor_desde_configuracion,
 )
-from tests.conftest import DOCTOR_GARCIA, sql_filas
+from tests.conftest import (
+    DOCTOR_GARCIA,
+    con_ajustes,
+    sql_filas,
+    transporte_devolviendo,
+    transporte_reventando,
+)
 
 CLAVE = "xkeysib-una-clave-de-prueba-que-no-es-de-nadie"
 UN_CORREO = Correo(para="paciente@example.com", asunto="Su cita mañana", cuerpo="A las 09:00.")
 ORIGEN = "https://clinica.example"
 
 
-def transporte_devolviendo(*, status_code: int, cuerpo: str = "", contenido: str = "application/json"):
-    """El transporte de mentira, más el pedido que realmente salió.
-
-    Se afirma sobre el pedido que construyó httpx y no sobre los argumentos de `Brevo`: lo que decide si
-    el aviso llega es el JSON y las cabeceras finales, y ahí es donde un `sender` mal formado se convierte
-    en un 400 del panel de Brevo --ningún correo sale-- sin que el log de la app diga nada.
-    """
-    visto: dict[str, httpx.Request] = {}
-
-    def manejar(pedido: httpx.Request) -> httpx.Response:
-        visto["pedido"] = pedido
-        return httpx.Response(status_code, text=cuerpo, headers={"content-type": contenido})
-
-    return httpx.MockTransport(manejar), visto
-
-
-def transporte_reventando(exc: Exception) -> httpx.MockTransport:
-    def manejar(pedido: httpx.Request) -> httpx.Response:
-        raise exc
-
-    return httpx.MockTransport(manejar)
-
-
 def brevo(transporte: httpx.AsyncBaseTransport) -> Brevo:
     return Brevo(api_key=CLAVE, de="doctor@clinic.example", nombre_remitente="Dra. García", transporte=transporte)
-
-
-def con_ajustes(monkeypatch: pytest.MonkeyPatch, **kwargs) -> Settings:
-    """Los ajustes tal como los vería el despliegue, sin `.env` de por medio.
-
-    Se sustituye `get_settings` del módulo y no la variable de entorno: el `.env` de quien corre la suite
-    puede tener un SMTP puesto de una prueba manual, y entonces el test describiría esa máquina en lugar
-    de describir el código.
-    """
-    ajustes = Settings(_env_file=None, **kwargs)
-    monkeypatch.setattr(modulo_de_correo, "get_settings", lambda: ajustes)
-    return ajustes
 
 
 # --- la llamada: es la API de Brevo, por HTTPS y con la clave en la cabecera ---
@@ -226,15 +200,17 @@ def test_un_proveedor_inventado_es_un_error_no_un_simulado_silencioso():
 
 @pytest.mark.parametrize(
     "escrito,esperado",
-    [("Brevo", Brevo), ("  smtp  ", Smtp), ("SIMULADO", None)],
+    [("Brevo", Brevo), ("  resend  ", Resend), ("  smtp  ", Smtp), ("SIMULADO", None)],
 )
 def test_como_se_escriba_el_canal_en_el_panel_no_cambia_lo_que_se_construye(escrito, esperado, monkeypatch):
-    """`Brevo` con la B mayúscula o con espacios de más es el mismo canal: no se puede apagar por formato."""
+    """`Brevo` con la B mayúscula o ` resend ` con espacios es el mismo canal: no se apaga por formato."""
     con_ajustes(
         monkeypatch,
         recordatorios_proveedor=escrito,
         brevo_api_key=CLAVE,
         brevo_de="d@e.com",
+        resend_api_key=CLAVE,
+        resend_de="d@e.com",
         smtp_host="smtp.example.com",
         smtp_de="d@e.com",
     )
@@ -285,6 +261,9 @@ def test_el_canal_smtp_sigue_construyendola_igual(monkeypatch):
         ("brevo", {"brevo_api_key": CLAVE, "brevo_de": "d@e.com"}, True, False),
         ("brevo", {"brevo_api_key": CLAVE}, False, True),
         ("brevo", {"brevo_de": "d@e.com"}, False, True),
+        ("resend", {"resend_api_key": CLAVE, "resend_de": "d@e.com"}, True, False),
+        ("resend", {"resend_api_key": CLAVE}, False, True),
+        ("resend", {"resend_de": "  "}, False, True),
         ("simulado", {}, False, False),
     ],
 )
